@@ -106,8 +106,9 @@ Note [`integration-testing.md`](./integration-testing.md) is stale where it desc
 
 A small suite that actually gates beats an aspirational pyramid.
 
-- **No coverage chase on the ten delete-candidate connectors.** `gatekeeper-confluence` has 7 test
-  files for a package the plan deletes.
+- **No coverage chase on deleted SaaS connectors.** The ten connectors removed under OZL-218
+  (including `gatekeeper-confluence`, which had 7 test files) are gone; don't backfill coverage for
+  packages that no longer exist.
 - **No Tier-2 case per gatekeeper.** One proves the binding-scan mechanism; the rest is the same
   code path.
 - **No automated re-derivation of the workerd wire protocol.** `plans/workerd-probe/echo.js` takes

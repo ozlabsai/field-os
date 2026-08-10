@@ -24,7 +24,7 @@
     "import/no-unassigned-import": "off",
 
     // Comment-only placeholder/reference modules are kept intentionally
-    // (e.g. App.tsx, gatekeeper-cloudflare/src/types.d.ts).
+    // (e.g. App.tsx, a gatekeeper's src/types.d.ts).
     "unicorn/no-empty-file": "off",
 
     // Conflicts with our convention of prefixing intentionally-unused bindings

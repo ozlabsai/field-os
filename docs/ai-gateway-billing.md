@@ -1,5 +1,10 @@
 # AI Gateway billing
 
+> **Note:** This entire feature is built on `gatekeeper-cloudflare`, which was deleted under
+> OZL-218 (SaaS connectors have no value on an airgapped/on-prem fork). Off by default and now
+> unreachable in practice since the Cloudflare gatekeeper no longer exists to connect through; kept
+> here for reference only.
+
 An optional flow that gives each user a **free daily allowance** of AI usage and, once that runs
 out, bills further usage to the user's **own Cloudflare AI Gateway credits**. Off by default
 (`ENABLE_CLOUDFLARE_LIMITS` unset) — usage is then unlimited, as for self-hosted deployments.

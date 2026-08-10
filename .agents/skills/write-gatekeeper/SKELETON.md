@@ -75,7 +75,7 @@ const MY_RESOURCE: SupportedResource = {
 
 // ---------------------------------------------------------------------------
 // HTTP handler — serves the browser-based auth flow.
-// For a complete OAuth example, see gatekeeper-google/src/google.ts.
+// For a complete OAuth example, see gatekeeper-github/src/github.ts.
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext) {
@@ -101,7 +101,7 @@ export default {
 
       // TODO: Redirect to external auth provider, or present an auth form.
       // For OAuth, generate a second nonce for the `state` parameter here —
-      // see gatekeeper-google for the full pattern.
+      // see gatekeeper-github for the full pattern.
       throw new Error("TODO: implement auth initiation");
     } else {
       return new Response("Not Found", {status: 404});
@@ -126,8 +126,10 @@ export class GatekeeperVendor extends WorkerEntrypoint<Env> implements Gatekeepe
   }
 
   // This skeleton has no independently grantable resources, so it ignores
-  // `options.resourceUrlPatterns` and stores an empty requested-resource list. Gatekeepers with
-  // grantable resources should follow gatekeeper-google.
+  // `options.resourceUrlPatterns` and stores an empty requested-resource list. No surviving
+  // gatekeeper package uses `resourceUrlPatterns` for grantable-resource selection at connect time
+  // (gatekeeper-google did, before its removal under OZL-218) — there is no in-repo example to
+  // follow for this case; consult the `GatekeeperConnectOptions` JSDoc in workshop-shared instead.
   async connectAccount(
       callback: Fetcher<GatekeeperConnectCallback>,
       _options?: {resourceUrlPatterns?: string[]}): Promise<{url: string}> {
@@ -149,7 +151,7 @@ export class GatekeeperVendor extends WorkerEntrypoint<Env> implements Gatekeepe
 // ---------------------------------------------------------------------------
 // UserAccount DO — stores per-user credentials (tokens, API keys, etc.).
 // For a full OAuth implementation with two-phase nonces and reconnect support,
-// see gatekeeper-google.
+// see gatekeeper-github.
 export class UserAccount extends DurableObject<Env> {
   async setCallback(
       callback: Fetcher<GatekeeperConnectCallback>,

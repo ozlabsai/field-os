@@ -33,10 +33,13 @@ test("cfAssetHash is truncated sha256 of base64 content plus extension", () => {
 });
 
 test("collectModules finds the main module and skips maps and READMEs", () => {
+  // The `mixed-modules` fixture is the only one carrying a .js.map and a README alongside the
+  // entrypoint and a -types.txt, which is what makes it exercise the skip logic. Every other
+  // fixture bundle is a bare .js.
   const { mainModule, modules } =
-      collectModules(join(TESTDATA, "fixture-bundles", "gatekeeper-google"));
-  assert.equal(mainModule, "google.js");
-  assert.deepEqual(modules.map((m) => m.name), ["abc123-types.txt", "google.js"]);
+      collectModules(join(TESTDATA, "fixture-bundles", "mixed-modules"));
+  assert.equal(mainModule, "bundle.js");
+  assert.deepEqual(modules.map((m) => m.name), ["abc123-types.txt", "bundle.js"]);
   assert.deepEqual(modules.map((m) => m.type), ["text", "esm"]);
   for (const mod of modules) {
     assert.equal(mod.sha256.length, 64);
