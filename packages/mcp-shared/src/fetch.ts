@@ -91,6 +91,11 @@ export function sdkFetch(options: FetchOptions = {}): FetchLike {
 
 // Whether a URL may be requested at all. Fails closed: an unparseable URL is refused rather than
 // handed to `fetch` to find out.
+//
+// `allowInsecure` widens the protocol to `http:` and suppresses the host blocklist. It must not
+// widen anything else: this guards every redirect hop in `guardedFetch`, so a blanket allowance
+// here would let a `Location: file:///etc/passwd` (or `ftp:`, or `data:`) through. Written as
+// independent positive conditions for that reason, matching `validateCustomEndpoint`.
 export function isAllowedUrl(url: string, options: FetchOptions = {}): boolean {
   let parsed: URL;
   try {
@@ -98,9 +103,11 @@ export function isAllowedUrl(url: string, options: FetchOptions = {}): boolean {
   } catch {
     return false;
   }
-  if (options.allowInsecure) return true;
-  if (parsed.protocol !== "https:") return false;
-  return !isBlockedHost(parsed.hostname);
+  if (parsed.protocol !== "https:" &&
+      !(options.allowInsecure && parsed.protocol === "http:")) {
+    return false;
+  }
+  return options.allowInsecure || !isBlockedHost(parsed.hostname);
 }
 
 // Fetches `url`, following redirects manually so each hop is checked.
