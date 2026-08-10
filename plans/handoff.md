@@ -110,6 +110,12 @@ Each of these looked like success while being wrong. That is what makes them wor
 - **`uniqueKey` values are permanent.** They become the on-disk directory name and there is no
   migration mechanism. `run-workerd.mjs` persists them in `.workerd/keys.json` — do not regenerate.
 - **`SIGTERM` is ignored by a wedged workerd.** Go straight to `SIGKILL`.
+- **Three inherited GitHub workflows could never pass here, and were deleted.** `cla.yml` checked
+  signatures against *Cloudflare's* CLA via a `cla-signatures` branch that does not exist on this
+  fork; `bonk.yml` and `bonk-pr.yml` needed `CLOUDFLARE_ACCOUNT_ID`/`GATEWAY_ID`/`API_TOKEN`
+  secrets that an airgapped fork has no reason to hold. Both failed on every PR by construction.
+  If an upstream sync reintroduces them, delete them again — two permanently-red checks teach
+  reviewers to skim past red, which is worse than no CI because it looks like coverage.
 - **An R2 miss must return 404 *and* a `cf-r2-error` header**, or `.get()` throws instead of
   resolving `null` — and the failure surfaces far from its cause.
 - **A refused outbound connection tells you almost nothing.** The calling code gets a bare `Error`
