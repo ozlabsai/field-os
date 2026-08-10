@@ -8,16 +8,10 @@
 // The same worker doubles as the dev router (`pnpm dev-server` at the repo root): dev has no
 // `ASSETS` binding, so frontend requests fall through to the backend instead.
 
-// gatekeeper-email's entrypoint: a WorkerEntrypoint whose optional email() handler is present.
-type EmailEntrypoint = CloudflareWorkersModule.WorkerEntrypoint &
-    Required<Pick<CloudflareWorkersModule.WorkerEntrypoint, "email">>;
-
 export interface Env {
   WORKSHOP_BACKEND: Fetcher;
   // Present in production (wrangler.jsonc assets stanza); absent in dev.
   ASSETS?: Fetcher;
-  // Dormant until custom domains + Email Routing exist; the handler ships anyway.
-  GATEKEEPER_EMAIL?: Service<EmailEntrypoint>;
   [key: string]: unknown;
 }
 
@@ -57,13 +51,5 @@ export default {
     // directly instead. (We don't try to forward to localhost:3000 becaues it doesn't work well:
     // Vite's HMR socket gets disconnected every time wrangler restarts workerd.)
     return env.WORKSHOP_BACKEND.fetch(req);
-  },
-
-  async email(message, env) {
-    if (!env.GATEKEEPER_EMAIL) {
-      message.setReject("No email gatekeeper is installed on this instance.");
-      return;
-    }
-    await env.GATEKEEPER_EMAIL.email(message);
   },
 } satisfies ExportedHandler<Env>;

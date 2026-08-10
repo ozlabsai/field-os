@@ -470,8 +470,8 @@ fixes the approach so those plans can proceed consistently.
 ### 9.1 Strategies
 
 Strategy is chosen **per resource type** (per `Gatekeeper` DO class / binding), **not** per
-gatekeeper package — a single package (e.g. `gatekeeper-google`) may use several strategies across
-its resource types.
+gatekeeper package — a single package may use several strategies across its resource types (e.g. a
+package with both a broad account-wide binding and narrower per-item bindings, per §9.3 below).
 
 - **A — Private-only.** Non-owner observers are refused: `addObserver()` unconditionally throws.
   This is the replacement for today's reliance on `prohibitAllSharing` for these resources (the
@@ -505,27 +505,8 @@ its resource types.
 
 | Gatekeeper | Resource type / binding | Strategy | `addObserver` behavior |
 |---|---|---|---|
-| **cloudflare** | (no resources — auth only) | **N** | Never in scope; nothing to implement. |
-| **email** | Email Mailbox | **D** | No-op. Synthetic per-gadget inbound address; the gadget's collaborators are the intended audience. |
-| **spotify** | Account / Playlist | **D** | No-op. Personal, low-stakes; no corp-security concern. |
 | **homeassistant** | Instance / Area / Label / Device / Entity | **D** | No-op. Self-hosted personal; the pasted long-lived token is all-or-nothing and HA exposes no per-user/per-entity ACL oracle to check against. |
 | **github** | Repo / Issue / PR | **B** | Check the observer's GitHub identity has read access to the bound repo (public → always pass; private → collaborator/org-team check). Issues/PRs inherit the repo ACL, so the repo is the atomic unit. |
-| **google** | Google Doc | **B** | Check the observer's Drive sharing access to the bound document. |
-| **google** | Google Spreadsheet | **B** | Check the observer's Google Sheets access to the bound spreadsheet. Spreadsheet sharing applies to the whole file, so it is the atomic unit. |
-| **google** | Google Calendar (selected calendar) | **B** | Require `writer` or `owner` access to the bound calendar, since `reader` access hides private-event details. Future: let the binding owner exclude private events so readers can collaborate. |
-| **google** | Google Calendar (`allVisible` availability) | **C** | In addition to the selected-calendar check, track foreign calendars whose free/busy data was successfully read and verify each observer can independently query their availability. |
-| **google** | Gmail Mailbox | **A** | Always throw. (Future: allow observers who independently have access, e.g. mailing-list members — explicitly out of scope now.) |
-| **google** | BigQuery | **C** | Track accessed datasets; verify the observer's IAM access to each. Dataset granularity for now (tables/columns later). |
-| **linear** | Team / Issue | **B** | Check the observer's workspace/team membership, honoring team privacy. |
-| **linear** | Workspace | **C** | Track accessed teams; verify the observer against each (reusing the Team B check). |
-| **notion** | Page / Database | **B** | Check the observer's Notion access to the bound page/database. |
-| **notion** | Workspace | **C** | Track accessed pages/databases; verify the observer's access to each. |
-| **supabase** | Project | **B** | Verify the observer's own `listProjects()` (`supabase-api.ts:306`) includes the bound project ref. Within a project, arbitrary read-only SQL spans the whole DB, so the project is the atomic unit (no per-table tracking). |
-| **supabase** | Organization | **C** | Track accessed project refs (the org session reaches them via `openProject` / `listProjects`, `supabase.ts:1015`/`:1037`); verify the observer's `listProjects()` includes each, reusing the Project B check. |
-| **confluence** | Site | **C** | Verify site access; track observed spaces and content because both can have narrower permissions. |
-| **confluence** | Space | **C** | Verify space access; track observed pages and blog posts because content restrictions may be narrower. |
-| **confluence** | Page / Blog Post | **C** | Verify bound-content access; track observed child pages because they may have stricter restrictions than their parent. |
-| **zoominfo** | Account | **A** | Always throw. The whole-account binding exposes licensed, entitlement-dependent and account-specific intelligence, and ZoomInfo provides no ACL oracle proving another account can read every historical result. |
 | **context** | Context Library singleton | **C** | Track observed collections; verify each is public in the sharing domain or privately owned by the observer's Context account. |
 
 ### 9.3 The "broad binding" lens
@@ -539,17 +520,13 @@ only when **both** of these hold:
 2. There is a **per-observer access oracle** to check each sub-resource against (otherwise you can
    log what was touched but cannot verify anyone against it).
 
-This is why the broad bindings split the way they do:
+This is why the broad bindings split the way they do among the surviving gatekeepers:
 
-- **Satisfy both → C:** Supabase Org (projects + `listProjects()` oracle), Linear Workspace
-  (teams + membership), Notion Workspace (pages + page access), BigQuery (datasets + IAM), Context
-  Library (public/private collections + account/domain ownership checks).
+- **Satisfy both → C:** Context Library (public/private collections + account/domain ownership
+  checks).
 - **Fail criterion 1 → B:** GitHub Repository — issues/PRs/discussions/code all inherit the single
   repo permission, and there is no binding broader than one repo, so the repo is the atomic ACL
   unit.
 - **Fail criterion 2 → D (or A):** Home Assistant Instance — areas/devices/entities exist but the
   long-lived token is all-or-nothing and HA has no per-user ACL oracle, so there is nothing to
-  verify an observer against. (Spotify is moot: ACL enforcement is off entirely under D.)
-- **Decomposition deliberately deferred → A:** Gmail Mailbox — could in principle decompose into
-  mailing lists the observer belongs to, but that is the out-of-scope "advanced" case, so it stays
-  fully private for now.
+  verify an observer against.

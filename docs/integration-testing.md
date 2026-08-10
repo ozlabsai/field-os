@@ -60,7 +60,7 @@ So `fixtures/gatekeeper-test/` is a real Worker speaking the real protocol, whos
 the tests set over an HTTP control route. **It is scoped to overseer logic, not a long-term substitute
 for per-vendor coverage.** Testing actual gatekeepers is the expected trajectory, which is why the
 harness takes a *list* of gatekeepers and the interceptor takes *pluggable* handler modules: a future
-`gatekeeper-google` suite is "add `google-handlers.ts`, point the harness at the package" — the same
+`gatekeeper-github` suite is "add `github-handlers.ts`, point the harness at the package" — the same
 shape a consumer repo's per-vendor suite takes, with production code unmodified.
 
 ### Storage isolation is by convention, because the alternative is worse

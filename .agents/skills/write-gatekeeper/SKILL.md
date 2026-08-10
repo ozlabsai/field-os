@@ -291,7 +291,7 @@ When `authorizeObservation()` is given `excludeObservers`, the overseer **blocks
 
 Some services can push events to the Gadget (inbound email, webhooks, chat messages, etc.). A gatekeeper exposes this as a **hook**: the Gadget registers a callback, and the gatekeeper later invokes it when an event arrives. Hooks are persistent — they survive across sessions and server restarts — and are subject to the same observation/action approval model as everything else.
 
-`gatekeeper-email` is the canonical reference implementation. Read it alongside the `HookController`, `HookInitiator`, and `ApprovalQueue.bindHook()` JSDoc in `gatekeeper.ts`.
+`gatekeeper-scheduler` is the canonical reference implementation. Read it alongside the `HookController`, `HookInitiator`, and `ApprovalQueue.bindHook()` JSDoc in `gatekeeper.ts`.
 
 ### The pieces
 
@@ -328,9 +328,12 @@ When defining a session interface with hooks, it's important to include comments
 
 ## Reference implementations
 
-- `packages/gatekeeper-google/` — OAuth, multiple resource types (Gmail, Google Docs, BigQuery), actions, caching/simulation examples, multiple Session types. **Observers:** all three strategies in one package — Gmail=A (always throw), Doc=B (single-unit ACL via `GoogleVerifier.hasDocAccess`), BigQuery=C (dataset tracking via `hasDatasetAccess`).
-- `packages/gatekeeper-email/` — Hook-based push notifications, no actions, email address claiming. **Observers:** strategy D (low-stakes no-ops + trivial verifier).
-- `packages/gatekeeper-github/` — **Observers:** clean strategy B example — `GitHubVerifier.hasRepoAccess` plus a one-method `addObserver`.
-- `packages/gatekeeper-supabase/` — **Observers:** strategy C with a per-session context object (`authorizeProjectObservation`) — good when sessions already hold a shared context.
-- `packages/gatekeeper-linear/` & `packages/gatekeeper-notion/` — **Observers:** strategy C where the page/team session impls are shared between the narrow (B) and broad (C) bindings, threading an `observe` hook through sub-sessions; both also handle one observation revealing multiple sets.
+- `packages/gatekeeper-github/` — OAuth (two-phase nonce/state flow), multiple resource kinds (repo/issue/pull) sharing one Session shape, actions, caching/simulation examples. **Observers:** clean strategy B example — `GitHubVerifier.hasRepoAccess` plus a one-method `addObserver`.
+- `packages/gatekeeper-scheduler/` — Hook-based push notifications (`HookController`/`HookInitiator`), no actions. **Observers:** strategy D (low-stakes no-ops).
+- `packages/gatekeeper-context/` — Account-singleton + management UI. **Observers:** strategy C (data-set tracking) — see `context-observers.ts` and `library-gatekeeper.ts`.
 - `packages/workshop-shared/src/gatekeeper.ts` — Canonical interfaces with detailed JSDoc (`getVerifier`, `addObserver`, `removeObserver`, `GatekeeperUserVerifier`, `ObservationDescription.excludeObservers`).
+
+No surviving gatekeeper demonstrates strategy A (always-throw, private-only) or a single package
+spanning all three of A/B/C at once — `gatekeeper-google` illustrated both before its removal under
+OZL-218. If you're implementing strategy A, see the strategy definition in
+[`docs/observers.md`](../../../docs/observers.md) §9.1; there is no in-repo example to copy from.

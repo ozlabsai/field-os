@@ -405,7 +405,7 @@ export interface GatekeeperVendor extends WorkerEntrypoint {
   //
   // SECURITY: The returned URL must include a cryptographic nonce (in addition to the DO ID) to
   // prevent replay attacks. The nonce should be stored in the DO and verified when the user visits
-  // the URL. See gatekeeper-google for a reference implementation.
+  // the URL. See gatekeeper-github for a reference implementation.
   //
   // `options.scopes` selects how much access to request (default "full"):
   //   - "full": the gatekeeper's full capability scopes (repos, docs, etc.). The resulting

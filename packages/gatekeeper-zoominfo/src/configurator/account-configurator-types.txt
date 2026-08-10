@@ -1,1 +1,0 @@
-account-configurator-types.d.ts

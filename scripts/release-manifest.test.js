@@ -137,19 +137,15 @@ test("worker entries carry the deploy contract", () => {
   }
 
   // Gatekeepers: BASE_URL under the shared origin, shortName matches the router's path scan.
-  const google = workers["gatekeeper-google"];
-  assert.equal(google.kind, "gatekeeper");
-  assert.equal(google.shortName, "google");
-  assert.equal(google.vars.BASE_URL, "$PUBLIC_BASE_URL/gatekeeper/google");
-  assert.ok(google.installable);
-  assert.deepEqual(google.inputs.map((i) => i.name), ["CLIENT_ID", "CLIENT_SECRET"]);
+  const github = workers["gatekeeper-github"];
+  assert.equal(github.kind, "gatekeeper");
+  assert.equal(github.shortName, "github");
+  assert.equal(github.vars.BASE_URL, "$PUBLIC_BASE_URL/gatekeeper/github");
+  assert.ok(github.installable);
+  assert.deepEqual(github.inputs.map((i) => i.name), ["CLIENT_ID", "CLIENT_SECRET"]);
   assert.deepEqual(
-      google.bindings.find((b) => b.name === "CLIENT_SECRET"),
+      github.bindings.find((b) => b.name === "CLIENT_SECRET"),
       { type: "secret_text", name: "CLIENT_SECRET", text: "$SECRET(CLIENT_SECRET)" });
-
-  // gatekeeper-email ships in the release but is not installable (needs Email Routing/a zone).
-  assert.equal(workers["gatekeeper-email"].installable, false);
-  assert.deepEqual(workers["gatekeeper-email"].inputs, []);
 
   // gatekeeper-context: closed-beta artifacts binding is cut; its KV is a normal template and
   // no OAuth-app inputs are demanded.
@@ -169,8 +165,8 @@ test("worker entries carry the deploy contract", () => {
   assert.equal(workers["gatekeeper-scheduler"].preinstall, true);
   assert.equal(workers["gatekeeper-scheduler"].singleton, true);
   assert.deepEqual(workers["gatekeeper-scheduler"].inputs, []);
-  assert.equal(google.preinstall, undefined);
-  assert.equal(google.singleton, undefined);
+  assert.equal(github.preinstall, undefined);
+  assert.equal(github.singleton, undefined);
   for (const [name, entry] of Object.entries(workers)) {
     if (entry.preinstall) {
       assert.ok(entry.installable, `${name}: preinstall requires installable`);
