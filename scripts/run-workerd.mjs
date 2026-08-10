@@ -30,6 +30,51 @@ const INCLUDED_GATEKEEPERS = new Set([
   "gatekeeper-homeassistant", "gatekeeper-oidc", "gatekeeper-github",
 ]);
 
+// workerd's `network` allow list accepts these alongside CIDR blocks (workerd.capnp:826-832).
+const ALLOW_KEYWORDS = new Set(["public", "private", "local", "network", "unix", "unix-abstract"]);
+
+// Rejects an `--allow` entry workerd would accept but an operator almost certainly did not mean.
+//
+// This runs at config generation because it is the last point where a mistake can be reported
+// usefully. Once workerd is running, a refused connection reaches the calling code as a bare
+// `Error` whose message is an opaque reference token -- indistinguishable from a DNS failure or a
+// crash, and never naming the address -- so an unreachable host is undiagnosable at runtime. The
+// error text below is the only chance to name the entry and say what is wrong with it.
+function validateAllow(allow) {
+  for (const entry of allow) {
+    if (ALLOW_KEYWORDS.has(entry)) continue;
+
+    const match = /^([0-9a-fA-F.:]+)\/(\d{1,3})$/.exec(entry);
+    if (!match) {
+      throw new Error(
+          `--allow: ${JSON.stringify(entry)} is neither a CIDR block nor one of ` +
+          `${[...ALLOW_KEYWORDS].join(", ")}.\n` +
+          `  Give a range like 10.42.7.9/32, or a bare host address with /32.`);
+    }
+
+    const prefix = Number(match[2]);
+    const isIpv6 = match[1].includes(":");
+    const width = isIpv6 ? 128 : 32;
+    if (prefix > width) {
+      throw new Error(`--allow: ${JSON.stringify(entry)} has a prefix wider than /${width}.`);
+    }
+
+    // A range this large is a whole corporate network, not a service. workerd's own schema shows
+    // `allow = ["public", "private"]` as its cautionary example; an operator reaching for a /8
+    // usually wants the handful of hosts inside it. Refused rather than warned, since a warning
+    // scrolls past and the resulting over-grant is invisible afterwards.
+    const minPrefix = isIpv6 ? 64 : 24;
+    if (prefix < minPrefix) {
+      const addresses = isIpv6 ? "a very large range" : `${2 ** (32 - prefix)} addresses`;
+      throw new Error(
+          `--allow: ${JSON.stringify(entry)} covers ${addresses}.\n` +
+          `  Ranges wider than /${minPrefix} are refused -- list the servers you need ` +
+          `individually (e.g. 10.42.7.9/32), or narrow the range.\n` +
+          `  Use "private" if you genuinely intend to reach the whole internal network.`);
+    }
+  }
+}
+
 function parseArgs(argv) {
   const args = {
     out: join(ROOT, ".workerd"), port: 8080, allow: ["public", "private"], buildOnly: false,
@@ -61,6 +106,7 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
+validateAllow(args.allow);
 
 // The origin the browser reaches this deployment on. Baked into the config rather than discovered,
 // because the workers need it to build absolute callback URLs.
