@@ -115,3 +115,32 @@ IMPORTANT: Frontend error reporting is a separate, opt-in path:
   Install automatic capture only in trusted first-party surfaces, never gadget/user-authored code.
   Exception messages and stacks reach the external Reporter, so never intentionally put secrets,
   prompts, tokens, headers, or request/response bodies in thrown errors or report metadata.
+
+---
+
+## Verification posture
+
+This is a fork that runs on a different runtime than upstream tests against, so claims in the
+planning docs decay silently. Four rules, each earned by a specific failure rather than stated as
+principle — the full list is in `plans/handoff.md` § Traps.
+
+**Plan claims are hypotheses until executed.** `plans/*.md` records reasoning, not guarantees. Two
+plausible, load-bearing claims were wrong: "R2 → MinIO, R2's API is S3-compatible" conflated R2's
+*S3 endpoint* with the *binding*, which MinIO cannot serve; "local inference is zero code changes"
+conflated the *endpoint* with the *request body*, and real vLLM rejects what we were sending. Both
+cost real time. When you correct one, cite `file:line` and fix it in the plan.
+
+**A test that does not exercise its subject is indistinguishable from a pass.** A denial-of-service
+repro silently never started the gadget — a missing `mainModule` meant the loader failed, the
+process looked healthy, and the result read green. Read the log, not the exit code. When a check
+matters, confirm it can *fail*: break the thing deliberately and watch it go red.
+
+**Prefer execution to inference, and label which you did.** "Verified by execution" and "inferred
+from the schema" are different claims and should not be written the same way. This matters most for
+delegated work: several agent findings were wrong in both directions, including a warning that the
+R2 protocol would be far harder than KV, which execution refuted.
+
+**Grep is not a search.** A character class missing `_` hid two services and produced a confident
+false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
+declarations *inside a prompt template literal*. Resolve imports rather than matching names, and
+sanity-check a pattern before trusting a negative result.
