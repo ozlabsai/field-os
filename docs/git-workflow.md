@@ -102,6 +102,17 @@ isolation. Verify the whole set has no importers from outside the set, then remo
 
 Things that have already cost time here. Each is cheap to avoid once known.
 
+**`gh` picks the wrong repository once `upstream` exists.** Adding the `upstream` remote made it
+`gh`'s default, and a `gh pr create` opened a PR against **Cloudflare's public repository** instead
+of ours. Two guards are in place — `gh repo set-default ozlabsai/field-os`, and `upstream`'s push
+URL set to `DISABLED` since it is read-only for us by definition. If you clone fresh, re-apply both.
+More generally: re-check any outward-facing command after touching remotes.
+
+**Running the release build breaks the next `types:check`.** `build-release.mjs` and
+`run-workerd.mjs` regenerate each package's gitignored `.wrangler/validate/`, which then fails type
+checking until cleared: `rm -rf packages/*/.wrangler`. The errors point at generated files you did
+not write, which makes this confusing the first time.
+
 **Workerd-only APIs break under the Node test runner.** `crypto.subtle.timingSafeEqual` and
 `Uint8Array.prototype.toHex` exist in workerd and not in the Node that most packages' vitest runs
 under. If you need one in code that is unit-tested, write a portable implementation — a *real* one,
