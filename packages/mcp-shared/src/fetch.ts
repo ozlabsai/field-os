@@ -15,19 +15,43 @@ const MAX_REDIRECTS = 3;
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-// Set by local development against an MCP server on localhost, which is otherwise refused.
-export type FetchOptions = { allowInsecure?: boolean };
-
-// The one environment variable this package reads. Each Worker's own `Env` satisfies it structurally.
-export type InsecureEnv = {
-  // When `"true"`, permits plain HTTP and private hosts. Local development only.
-  MCP_ALLOW_INSECURE?: string;
+// Relaxations of the endpoint policy, each independently switchable.
+//
+// Separate because they are orthogonal: an MCP server on the deployment's own network, reachable
+// over HTTPS with a private CA, needs the private-host relaxation and must not have to give up the
+// protocol requirement to get it. A single switch for both forced exactly that trade.
+export type FetchOptions = {
+  // Permits `http://`, on the endpoint and on every redirect hop.
+  allowHttp?: boolean;
+  // Skips the private/loopback/link-local/metadata hostname block.
+  //
+  // This only stops the *pre-resolution* refusal from firing. What is actually reachable is decided
+  // after DNS resolution by the runtime's outbound network policy -- `global_fetch_strictly_public`
+  // on Cloudflare, or a workerd `network` service `allow` list off-platform -- which is the security
+  // boundary. See the note on BLOCKED_HOST_PATTERNS in endpoint.ts.
+  allowPrivateHosts?: boolean;
 };
 
-// Reads the local-development escape hatch. One definition, since this switch turns off the SSRF
-// checks and copies of it would be copies of that.
-export function fetchOptions(env: InsecureEnv): FetchOptions {
-  return { allowInsecure: (env.MCP_ALLOW_INSECURE ?? "").toLowerCase() === "true" };
+// The environment variables this package reads. Each Worker's own `Env` satisfies it structurally.
+export type FetchPolicyEnv = {
+  // When `"true"`, permits plain HTTP endpoints. Anything else, including unset, requires HTTPS.
+  MCP_ALLOW_HTTP?: string;
+  // When `"true"`, permits private, loopback, link-local and cloud-metadata hosts. Anything else,
+  // including unset, refuses them.
+  MCP_ALLOW_PRIVATE_HOSTS?: string;
+};
+
+// Reads the endpoint policy. One definition, since these switches turn off SSRF checks and copies
+// of them would be copies of that.
+export function fetchOptions(env: FetchPolicyEnv): FetchOptions {
+  return {
+    allowHttp: isTrue(env.MCP_ALLOW_HTTP),
+    allowPrivateHosts: isTrue(env.MCP_ALLOW_PRIVATE_HOSTS),
+  };
+}
+
+function isTrue(value: string | undefined): boolean {
+  return (value ?? "").toLowerCase() === "true";
 }
 
 // Cap on any single response body this gatekeeper buffers.
@@ -92,10 +116,10 @@ export function sdkFetch(options: FetchOptions = {}): FetchLike {
 // Whether a URL may be requested at all. Fails closed: an unparseable URL is refused rather than
 // handed to `fetch` to find out.
 //
-// `allowInsecure` widens the protocol to `http:` and suppresses the host blocklist. It must not
-// widen anything else: this guards every redirect hop in `guardedFetch`, so a blanket allowance
-// here would let a `Location: file:///etc/passwd` (or `ftp:`, or `data:`) through. Written as
-// independent positive conditions for that reason, matching `validateCustomEndpoint`.
+// The two relaxations widen the protocol to `http:` and suppress the host blocklist respectively,
+// and neither widens anything else: this guards every redirect hop in `guardedFetch`, so a blanket
+// allowance here would let a `Location: file:///etc/passwd` (or `ftp:`, or `data:`) through.
+// Written as independent positive conditions for that reason, matching `validateCustomEndpoint`.
 export function isAllowedUrl(url: string, options: FetchOptions = {}): boolean {
   let parsed: URL;
   try {
@@ -103,11 +127,10 @@ export function isAllowedUrl(url: string, options: FetchOptions = {}): boolean {
   } catch {
     return false;
   }
-  if (parsed.protocol !== "https:" &&
-      !(options.allowInsecure && parsed.protocol === "http:")) {
+  if (parsed.protocol !== "https:" && !(options.allowHttp && parsed.protocol === "http:")) {
     return false;
   }
-  return options.allowInsecure || !isBlockedHost(parsed.hostname);
+  return options.allowPrivateHosts === true || !isBlockedHost(parsed.hostname);
 }
 
 // Fetches `url`, following redirects manually so each hop is checked.

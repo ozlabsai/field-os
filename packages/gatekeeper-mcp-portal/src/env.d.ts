@@ -9,7 +9,8 @@ declare namespace Cloudflare {
     MCP_PORTAL_TOKEN?: string;
     MCP_PORTAL_TRUST_ANNOTATIONS?: string;
     MCP_CLIENT_NAME?: string;
-    MCP_ALLOW_INSECURE?: string;
+    MCP_ALLOW_HTTP?: string;
+    MCP_ALLOW_PRIVATE_HOSTS?: string;
   }
 
   interface GlobalProps {

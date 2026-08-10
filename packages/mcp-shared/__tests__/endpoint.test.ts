@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { isBlockedHost, validateCustomEndpoint } from "../src/endpoint.js";
-import type { InsecureEnv } from "../src/fetch.js";
+import type { FetchPolicyEnv } from "../src/fetch.js";
 
-function env(overrides: Record<string, string> = {}): InsecureEnv {
-  return overrides as InsecureEnv;
+function env(overrides: Record<string, string> = {}): FetchPolicyEnv {
+  return overrides as FetchPolicyEnv;
 }
 
 describe("validateCustomEndpoint", () => {
@@ -17,10 +17,41 @@ describe("validateCustomEndpoint", () => {
     expect(validateCustomEndpoint(env(), "not a url").ok).toBe(false);
   });
 
-  it("requires https unless insecure mode is explicitly enabled", () => {
+  // The two relaxations are orthogonal, which is the whole point of splitting them: reaching an
+  // internal MCP server over HTTPS must not require also accepting plaintext, and vice versa.
+  it("refuses both plain HTTP and private hosts by default", () => {
     expect(validateCustomEndpoint(env(), "http://mcp.example.com/mcp").ok).toBe(false);
+    expect(validateCustomEndpoint(env(), "https://10.1.2.3/mcp").ok).toBe(false);
+  });
+
+  it("MCP_ALLOW_HTTP widens the protocol and nothing else", () => {
+    const e = env({ MCP_ALLOW_HTTP: "true" });
+    expect(validateCustomEndpoint(e, "http://mcp.example.com/mcp").ok).toBe(true);
+    expect(validateCustomEndpoint(e, "https://10.1.2.3/mcp").ok).toBe(false);
+    expect(validateCustomEndpoint(e, "http://10.1.2.3/mcp").ok).toBe(false);
+  });
+
+  // The OZL-240 case: an internal server reachable over HTTPS, without giving up the protocol check.
+  it("MCP_ALLOW_PRIVATE_HOSTS widens the host and nothing else", () => {
+    const e = env({ MCP_ALLOW_PRIVATE_HOSTS: "true" });
+    expect(validateCustomEndpoint(e, "https://10.1.2.3/mcp").ok).toBe(true);
+    expect(validateCustomEndpoint(e, "http://mcp.example.com/mcp").ok).toBe(false);
+    expect(validateCustomEndpoint(e, "http://10.1.2.3/mcp").ok).toBe(false);
+  });
+
+  it("both together preserve the local-development case", () => {
     expect(validateCustomEndpoint(
-      env({ MCP_ALLOW_INSECURE: "true" }), "http://localhost:1234/mcp").ok).toBe(true);
+      env({ MCP_ALLOW_HTTP: "true", MCP_ALLOW_PRIVATE_HOSTS: "true" }),
+      "http://localhost:1234/mcp").ok).toBe(true);
+  });
+
+  it("only the literal string \"true\" enables a relaxation", () => {
+    expect(validateCustomEndpoint(env({ MCP_ALLOW_HTTP: "TRUE" }),
+      "http://mcp.example.com/mcp").ok).toBe(true);
+    for (const value of ["1", "yes", "", "false"]) {
+      expect(validateCustomEndpoint(env({ MCP_ALLOW_HTTP: value }),
+        "http://mcp.example.com/mcp").ok).toBe(false);
+    }
   });
 
   it("blocks loopback, private, link-local, IPv6, and metadata hosts", () => {

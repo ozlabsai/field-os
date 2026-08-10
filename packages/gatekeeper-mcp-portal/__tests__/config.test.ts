@@ -72,8 +72,21 @@ describe("readPortalConfig", () => {
     expect(readPortalConfig(env({ MCP_PORTAL_URL: "http://localhost:9000/mcp" }))).toBeNull();
     expect(readPortalConfig(env({
       MCP_PORTAL_URL: "http://localhost:9000/mcp",
-      MCP_ALLOW_INSECURE: "true",
+      MCP_ALLOW_HTTP: "true",
     }))?.endpoint).toBe("http://localhost:9000/mcp");
+  });
+
+  it("allowing private hosts does not by itself permit http", () => {
+    // The two relaxations are separate axes here too: a portal on the deployment's own network is
+    // reachable over https without also accepting plaintext.
+    expect(readPortalConfig(env({
+      MCP_PORTAL_URL: "http://localhost:9000/mcp",
+      MCP_ALLOW_PRIVATE_HOSTS: "true",
+    }))).toBeNull();
+    expect(readPortalConfig(env({
+      MCP_PORTAL_URL: "https://portal.internal/mcp",
+      MCP_ALLOW_PRIVATE_HOSTS: "true",
+    }))?.endpoint).toBe("https://portal.internal/mcp");
   });
 });
 
