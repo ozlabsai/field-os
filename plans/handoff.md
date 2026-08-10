@@ -112,6 +112,17 @@ Each of these looked like success while being wrong. That is what makes them wor
 - **`SIGTERM` is ignored by a wedged workerd.** Go straight to `SIGKILL`.
 - **An R2 miss must return 404 *and* a `cf-r2-error` header**, or `.get()` throws instead of
   resolving `null` — and the failure surfaces far from its cause.
+- **A refused outbound connection tells you almost nothing.** The calling code gets a bare `Error`
+  reading `internal error; reference = <token>` — no `code`, no `cause`, and never the address —
+  and the matching workerd log line (`connect() blocked by restrictPeers()`) does not record the
+  address either. A network-policy refusal and a DNS failure are byte-identical, so nothing can
+  claim which occurred. One asymmetry does separate them: **a DNS failure logs the hostname**
+  (`DNS lookup failed.; params.host = …`) while a policy block logs no address, so a
+  `restrictPeers()` line with no `params.host` beside it means the name resolved and policy refused
+  it. Undocumented workerd behaviour — useful for diagnosis, not something to build a control on.
+  A peer refusing the connection *is* distinguishable: it arrives as `Network connection lost.`
+  with a `retryable` property, meaning the address was permitted and something at the far end is
+  wrong.
 
 ## How to run it
 
@@ -123,6 +134,27 @@ node scripts/run-workerd.mjs --no-watchdog    # when attaching a debugger
 
 Then `http://localhost:8080`. Local inference needs the default `--allow public,private`, since
 standalone workerd blocks private IPs by default.
+
+`--allow` is the deployment-wide grant, and `public,private` is a blunt one — it opens every RFC1918
+address to every worker that has any internal dependency. `FIELDOS_INTERNAL_HOSTS` narrows that by
+naming the services the deployment actually depends on, so each worker reaches only its own:
+
+```sh
+FIELDOS_INTERNAL_HOSTS="inference=vllm.corp.internal:8000,mcp=10.42.8.20,oidc=idp.corp.internal" \
+  node scripts/run-workerd.mjs --allow public
+```
+
+Roles are `inference`, `mcp`, `oidc` and `homeassistant`; a role may repeat for several servers.
+Values may be hostnames or addresses — hostnames are resolved **at config generation**, because
+workerd filters on the resolved address and never sees the name. Two consequences: a host that
+changes address is unreachable until the next restart re-resolves it, and a name that fails to
+resolve is a warning rather than a fatal error, since a resolver hiccup during a restart must not
+make the deployment unbootable.
+
+Ranges wider than `/24` are refused from either source; `--allow public,private` remains the way to
+say "the whole internal network" deliberately. Startup prints the reach each worker ended up with,
+which is worth reading — a refused connection is close to undiagnosable at runtime (see the trap
+below).
 
 The gate before any push, per `docs/git-workflow.md`:
 

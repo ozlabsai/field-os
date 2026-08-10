@@ -18,11 +18,17 @@ after(() => rmSync(out, { recursive: true, force: true }));
 
 // A deliberately permissive `--allow`, so a worker that reaches the internal network only because
 // it shares one service with everyone would show up as a failure here rather than passing by
-// virtue of the deployment having granted nothing.
+// virtue of the deployment having granted nothing. Declaring one host per role additionally proves
+// the roles stay separated -- an address given for inference must not appear in the MCP connector's
+// service, and vice versa.
 execFileSync("node", [
   join(ROOT, "scripts/run-workerd.mjs"),
   "--build-only", "--out", out, "--allow", "public,10.9.8.0/24",
-], { cwd: ROOT, stdio: "pipe" });
+], {
+  cwd: ROOT,
+  stdio: "pipe",
+  env: { ...process.env, FIELDOS_INTERNAL_HOSTS: "inference=10.1.1.1,mcp=10.2.2.2" },
+});
 
 const capnp = readFileSync(join(out, "config.capnp"), "utf8");
 
@@ -42,20 +48,39 @@ function outboundByWorker() {
 describe("per-worker outbound reach", () => {
   const outbound = outboundByWorker();
 
-  it("emits a public-only service alongside the deployment's own", () => {
-    assert.match(capnp, /\(name = "internet", network = \(allow = \["public", "10\.9\.8\.0\/24"\]\)\)/);
+  it("emits a public-only service, and one per worker with internal reach", () => {
     assert.match(capnp, /\(name = "internet-public", network = \(allow = \["public"\]\)\)/);
+    assert.match(capnp, /\(name = "net-workshop-backend", network = \(allow = \[[^\]]*\]\)\)/);
   });
 
   // Each of these contacts a host the operator chose, which on an isolated network is internal by
   // definition -- inference, an on-prem MCP server, a Home Assistant instance, an IdP issuer.
   it("grants internal reach only to the workers that need it", () => {
-    for (const worker of [
-      "workshopBackendWorker", "gatekeeperMcpWorker", "gatekeeperMcpPortalWorker",
-      "gatekeeperHomeassistantWorker", "gatekeeperOidcWorker",
-    ]) {
-      assert.equal(outbound[worker], "internet", `${worker} should reach the internal network`);
+    const expected = {
+      workshopBackendWorker: "net-workshop-backend",
+      gatekeeperMcpWorker: "net-gatekeeper-mcp",
+      gatekeeperMcpPortalWorker: "net-gatekeeper-mcp-portal",
+      gatekeeperHomeassistantWorker: "net-gatekeeper-homeassistant",
+      gatekeeperOidcWorker: "net-gatekeeper-oidc",
+    };
+    for (const [worker, service] of Object.entries(expected)) {
+      assert.equal(outbound[worker], service, `${worker} should reach the internal network`);
     }
+  });
+
+  // The point of keying declared hosts by role: an address given for one role must not widen an
+  // unrelated worker. Without this, declaring an inference server would also expose it to the MCP
+  // connector, which is the pooling OZL-250 removed one layer up.
+  it("keeps one role's addresses out of another role's service", () => {
+    const serviceAllow = (name) =>
+      new RegExp(`\\(name = "${name}", network = \\(allow = \\[([^\\]]*)\\]\\)\\)`).exec(capnp)?.[1];
+
+    const backend = serviceAllow("net-workshop-backend");
+    const mcp = serviceAllow("net-gatekeeper-mcp");
+    assert.ok(backend.includes('"10.1.1.1/32"'), "backend should reach the inference host");
+    assert.ok(!backend.includes("10.2.2.2"), "backend must not reach the MCP host");
+    assert.ok(mcp.includes('"10.2.2.2/32"'), "MCP connector should reach the MCP host");
+    assert.ok(!mcp.includes("10.1.1.1"), "MCP connector must not reach the inference host");
   });
 
   // The point of the split: a bug in one of these must not inherit the MCP connector's reach.
@@ -65,6 +90,20 @@ describe("per-worker outbound reach", () => {
       "routerWorker", "assetsWorker",
     ]) {
       assert.equal(outbound[worker], "internet-public", `${worker} should not reach the internal network`);
+    }
+  });
+
+  // FIELDOS_INTERNAL_HOSTS and --allow are two paths into the same allow list. Validating only the
+  // one the check was written for let `mcp=0.0.0.0/0` reach a service ungated, so both are checked
+  // where they converge.
+  it("refuses an over-broad range declared through FIELDOS_INTERNAL_HOSTS", () => {
+    for (const hosts of ["mcp=0.0.0.0/0", "mcp=::/0", "mcp=10.42.0.0/16"]) {
+      assert.throws(
+        () => execFileSync("node", [
+          join(ROOT, "scripts/run-workerd.mjs"), "--build-only", "--out", out, "--allow", "public",
+        ], { cwd: ROOT, stdio: "pipe", env: { ...process.env, FIELDOS_INTERNAL_HOSTS: hosts } }),
+        (err) => String(err.stderr).includes("FIELDOS_INTERNAL_HOSTS"),
+        `${hosts} should be refused, naming the config it came from`);
     }
   });
 

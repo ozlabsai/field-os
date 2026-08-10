@@ -16,6 +16,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectModules } from "./release/hash-lib.mjs";
 import { findDeployablePackages, readWranglerConfig } from "./release/manifest-lib.mjs";
+import { parseInternalHosts, resolveInternalHosts } from "./internal-hosts.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGES_DIR = join(ROOT, "packages");
@@ -40,14 +41,14 @@ const ALLOW_KEYWORDS = new Set(["public", "private", "local", "network", "unix",
 // `Error` whose message is an opaque reference token -- indistinguishable from a DNS failure or a
 // crash, and never naming the address -- so an unreachable host is undiagnosable at runtime. The
 // error text below is the only chance to name the entry and say what is wrong with it.
-function validateAllow(allow) {
+function validateAllow(allow, source = "--allow") {
   for (const entry of allow) {
     if (ALLOW_KEYWORDS.has(entry)) continue;
 
     const match = /^([0-9a-fA-F.:]+)\/(\d{1,3})$/.exec(entry);
     if (!match) {
       throw new Error(
-          `--allow: ${JSON.stringify(entry)} is neither a CIDR block nor one of ` +
+          `${source}: ${JSON.stringify(entry)} is neither a CIDR block nor one of ` +
           `${[...ALLOW_KEYWORDS].join(", ")}.\n` +
           `  Give a range like 10.42.7.9/32, or a bare host address with /32.`);
     }
@@ -56,7 +57,7 @@ function validateAllow(allow) {
     const isIpv6 = match[1].includes(":");
     const width = isIpv6 ? 128 : 32;
     if (prefix > width) {
-      throw new Error(`--allow: ${JSON.stringify(entry)} has a prefix wider than /${width}.`);
+      throw new Error(`${source}: ${JSON.stringify(entry)} has a prefix wider than /${width}.`);
     }
 
     // A range this large is a whole corporate network, not a service. workerd's own schema shows
@@ -67,7 +68,7 @@ function validateAllow(allow) {
     if (prefix < minPrefix) {
       const addresses = isIpv6 ? "a very large range" : `${2 ** (32 - prefix)} addresses`;
       throw new Error(
-          `--allow: ${JSON.stringify(entry)} covers ${addresses}.\n` +
+          `${source}: ${JSON.stringify(entry)} covers ${addresses}.\n` +
           `  Ranges wider than /${minPrefix} are refused -- list the servers you need ` +
           `individually (e.g. 10.42.7.9/32), or narrow the range.\n` +
           `  Use "private" if you genuinely intend to reach the whole internal network.`);
@@ -107,6 +108,23 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 validateAllow(args.allow);
+
+// The internal services this deployment depends on, resolved to addresses now because workerd
+// filters on the resolved address and never sees the hostname. Pinning at config generation is
+// what makes a name usable at all here; the cost is that a host which later changes address stops
+// being reachable until the next restart, which regenerates this.
+const internalHosts = await resolveInternalHosts(
+    parseInternalHosts(process.env.FIELDOS_INTERNAL_HOSTS));
+
+// A name that did not resolve is reported, not fatal. Boot-time DNS is not request-time DNS, and a
+// resolver hiccup during a restart must not leave a deployment unbootable -- but silence here would
+// surface much later as an opaque connection failure, which is the trap this whole area exists to
+// avoid (OZL-251).
+for (const { role, target, code } of internalHosts.failures) {
+  console.warn(
+      `warning: FIELDOS_INTERNAL_HOSTS ${role}=${target} did not resolve (${code}).\n` +
+      `         Requests to it will fail at runtime. Check the name, or give an address.`);
+}
 
 // The origin the browser reaches this deployment on. Baked into the config rather than discovered,
 // because the workers need it to build absolute callback URLs.
@@ -207,18 +225,38 @@ function serviceName(pkgName) {
 // and gatekeeper-scheduler own their state in Durable Objects, gatekeeper-github talks to GitHub
 // (public, or an operator's GHES once OZL-220 lands -- which will need adding here), and the router
 // reaches other workers through service bindings rather than the network.
-const INTERNAL_REACH = new Set([
-  "workshop-backend",
-  "gatekeeper-mcp",
-  "gatekeeper-mcp-portal",
-  "gatekeeper-homeassistant",
-  "gatekeeper-oidc",
+// Each worker reaches the roles it depends on and no others, so declaring an inference server does
+// not also make it reachable from the MCP connector. Keyed by role rather than by worker because
+// that is how the operator declares them (FIELDOS_INTERNAL_HOSTS="inference=...,mcp=...").
+// Known limitation: an MCP server's OAuth chain follows a `WWW-Authenticate` header and then an
+// issuer, both chosen by the far side rather than configured (see gatekeeper-mcp-portal's
+// wrangler.jsonc). So an internal MCP server whose issuer lives on a *different* internal address
+// than the server itself needs that address declared as another `mcp=` entry. Granting the MCP
+// workers the `oidc` role instead would be wrong: that role is the deployment's sign-in issuer,
+// which is unrelated to whatever an MCP server nominates.
+const INTERNAL_REACH = new Map([
+  ["workshop-backend", ["inference"]],
+  ["gatekeeper-mcp", ["mcp"]],
+  ["gatekeeper-mcp-portal", ["mcp"]],
+  ["gatekeeper-homeassistant", ["homeassistant"]],
+  ["gatekeeper-oidc", ["oidc"]],
 ]);
 
 // The outbound service a worker gets. Public-only is the default, so a newly added package is
 // safe until someone deliberately lists it above.
+//
+// A worker with an internal role always gets its own service, whether or not any host was
+// declared for that role: `--allow` is the deployment-wide grant and must keep working on its own,
+// as it did before FIELDOS_INTERNAL_HOSTS existed. Declaring hosts *adds* that role's addresses on
+// top -- the narrowing it buys is that other workers do not get them, not that this one gets less.
 function outboundServiceFor(pkgName) {
-  return INTERNAL_REACH.has(pkgName) ? "internet" : "internet-public";
+  return INTERNAL_REACH.has(pkgName) ? outboundServiceName(pkgName) : "internet-public";
+}
+
+// One service per worker that has internal reach. Named after the worker so the generated capnp
+// says who each grant is for -- `net-gatekeeper-mcp` rather than a shared `internet`.
+function outboundServiceName(pkgName) {
+  return `net-${pkgName}`;
 }
 
 function bindingNameFor(gatekeeperPkgName) {
@@ -421,8 +459,23 @@ serviceEntries.push(`    (name = "do-disk", disk = (path = ${capnpString(doDiskP
 // that actually have such a dependency get it. Everything else is pinned to public-only, so a bug
 // or a compromised dependency in (say) the scheduler cannot reach RFC1918 space just because the
 // MCP connector legitimately must. See INTERNAL_REACH below for who is which.
-serviceEntries.push(`    (name = "internet", network = (allow = [${args.allow.map(capnpString).join(", ")}])),`);
 serviceEntries.push(`    (name = "internet-public", network = (allow = ["public"])),`);
+
+// One service per worker that has internal reach, carrying only the addresses for the roles that
+// worker depends on. `--allow` still applies on top: it is the deployment-wide grant, and a role's
+// addresses are added to it rather than replacing it.
+for (const [pkgName, roles] of INTERNAL_REACH) {
+  if (!included.some((p) => p.name === pkgName)) continue;
+  const addresses = roles.flatMap((role) => internalHosts.addresses.get(role) ?? []);
+  const allow = [...new Set([...args.allow, ...addresses])];
+  // Validated here rather than at each source: `--allow` and FIELDOS_INTERNAL_HOSTS are two paths
+  // into the same allow list, and checking only the one it was written for is how `mcp=0.0.0.0/0`
+  // reached a service ungated. This is where they converge, so a third path would be covered too.
+  validateAllow(allow, `FIELDOS_INTERNAL_HOSTS (${roles.join("/")})`);
+  serviceEntries.push(
+      `    (name = ${capnpString(outboundServiceName(pkgName))}, ` +
+      `network = (allow = [${allow.map(capnpString).join(", ")}])),`);
+}
 
 // The socket below points `service = "router"`, which resolves to the "router" entry the worker
 // loop already pushed — no separate alias entry needed (Service has no `service` field of its
@@ -445,6 +498,20 @@ writeFileSync(keysPath, JSON.stringify(keys, null, 2) + "\n");
 const configPath = join(args.out, "config.capnp");
 writeFileSync(configPath, capnp);
 console.log(`\nwrote ${configPath}`);
+
+// Print the reachability actually emitted. A refused connection is undiagnosable at runtime -- an
+// opaque token to the caller, an addressless line in the log (OZL-251) -- so this is where an
+// operator gets to see what they granted, and to which worker, without reading generated capnp.
+console.log(`\noutbound reach (--allow ${args.allow.join(",") || "none"}):`);
+for (const [pkgName, roles] of INTERNAL_REACH) {
+  if (!included.some((p) => p.name === pkgName)) continue;
+  const addresses = roles.flatMap((role) => internalHosts.addresses.get(role) ?? []);
+  console.log(addresses.length > 0
+      ? `  ${pkgName}: ${[...args.allow, ...addresses].join(", ")} (${roles.join(", ")})`
+      : `  ${pkgName}: ${args.allow.join(", ") || "nothing"} ` +
+        `— no ${roles.join("/")} host declared`);
+}
+console.log("  all other workers: public only");
 
 // ---------------------------------------------------------------------------
 // 4. Spawn workerd, unless --build-only, supervised by a watchdog unless --no-watchdog.
