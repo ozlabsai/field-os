@@ -1,4 +1,5 @@
 import type { Message, Usage } from "@earendil-works/pi-ai";
+import { classifyUnreachable } from "@gadgets/backend-utils/unreachable";
 import type { ModelHandle } from "./ai-models.js";
 
 /**
@@ -40,6 +41,23 @@ export function httpStatusFromError(errorMessage: string, handle: ModelHandle)
   const match = /^(\d{3})\b/.exec(errorMessage.trim());
   if (match) return Number(match[1]);
   return handle.lastResponse?.status;
+}
+
+/**
+ * Whether a failed model request is worth reporting to the issue Reporter.
+ *
+ * Two things are deliberately not incidents. Expected provider 4xx (auth, rate limit, quota) are
+ * ordinary control flow. A request that never reached a provider is the deployment's own
+ * configuration -- an inference endpoint that is unreachable or misaddressed -- and it repeats on
+ * every retry for as long as the misconfiguration stands, so reporting it turns one operator
+ * mistake into unbounded incident traffic.
+ *
+ * An undefined status alone cannot separate the second case from a genuinely unclassifiable
+ * failure, since neither observed a response; `classifyUnreachable` is what tells them apart.
+ */
+export function shouldReportTurnFailure(err: unknown, statusCode: number | undefined): boolean {
+  if (classifyUnreachable(err) !== null) return false;
+  return statusCode === undefined || statusCode >= 500;
 }
 
 /**
