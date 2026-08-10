@@ -11,8 +11,8 @@ const HTTPS_RESOURCE: SupportedResource = {
 
 const HTTP_RESOURCE: SupportedResource = { ...HTTPS_RESOURCE, urlPattern: "http://*" };
 
-export function mcpResources(allowInsecure: boolean): SupportedResource[] {
-  return allowInsecure ? [HTTPS_RESOURCE, HTTP_RESOURCE] : [HTTPS_RESOURCE];
+export function mcpResources(allowHttp: boolean): SupportedResource[] {
+  return allowHttp ? [HTTPS_RESOURCE, HTTP_RESOURCE] : [HTTPS_RESOURCE];
 }
 
 export function mcpResourceFor(endpoint: string): SupportedResource {

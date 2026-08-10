@@ -67,21 +67,23 @@ See `src/types.d.ts` in `@gadgets/mcp-shared` for the base session API.
 | --- | --- |
 | `BASE_URL` | Public base URL of this Worker, for OAuth redirects. |
 | `MCP_CLIENT_NAME` | Client name sent in `initialize` and dynamic client registration. |
-| `MCP_ALLOW_INSECURE` | `"true"` to disable the endpoint checks entirely: permits `http://` **and** private, loopback, link-local, and cloud-metadata hosts, on the endpoint and on every OAuth URL discovered from it. Local dev only. |
+| `MCP_ALLOW_HTTP` | `"true"` permits `http://`, on the endpoint and on every OAuth URL discovered from it. Nothing else. |
+| `MCP_ALLOW_PRIVATE_HOSTS` | `"true"` permits private, loopback, link-local and cloud-metadata hosts — for an MCP server on the deployment's own network. Only lifts the *pre-resolution* refusal; what is actually reachable is decided after DNS resolution by the runtime's outbound network policy. |
 
 There is nothing to configure per server: users supply endpoints, and an administrator's only lever
 is whether this connector is offered at all, in the Gatekeepers admin panel. There is no server
 catalog — a deployment that wants to offer a chosen set of servers should front them with a portal
 and use [`gatekeeper-mcp-portal`](../gatekeeper-mcp-portal/README.md).
 
-For local development no credentials are needed. Set `MCP_ALLOW_INSECURE=true` in the repo-root
-`.dev.vars` to connect a server running on localhost.
+For local development no credentials are needed. Set both `MCP_ALLOW_HTTP=true` and
+`MCP_ALLOW_PRIVATE_HOSTS=true` in the repo-root `.dev.vars` to connect a server running on
+localhost. They are separate because an internal server reached over HTTPS needs only the second.
 
 ## How the connect flow works
 
 1. The user starts a connection and gets a form asking for the server's endpoint URL. The URL is
    validated against the host blocklist in `endpoint.ts` (no private, loopback, or metadata hosts;
-   HTTPS required unless `MCP_ALLOW_INSECURE`). The form says plainly that connecting a server is a
+   HTTPS required unless `MCP_ALLOW_HTTP`). The form says plainly that connecting a server is a
    decision to trust it, since the server's own annotations decide which of its tools run without
    asking (see below).
 2. The gatekeeper opens a Streamable HTTP session and calls `initialize`. A server that completes
@@ -199,7 +201,7 @@ connect their own server.
   rebinds, to a private address. The actual boundary is the `global_fetch_strictly_public`
   compatibility flag in `wrangler.jsonc`, which makes workerd reject reserved IP ranges after
   resolution on every request and redirect hop. It does not apply under `wrangler dev`, which is
-  what keeps `MCP_ALLOW_INSECURE` usable locally.
+  what keeps the `MCP_ALLOW_*` relaxations usable locally.
 - **Sharing UI reports late.** `GadgetMetadata.sharingProhibited` derives only from
   `prohibitAllSharing`, so creating a share key appears to succeed and fails when the recipient
   opens it. Fixing this needs a kernel change.

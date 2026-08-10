@@ -46,6 +46,36 @@ describe("guardedFetch", () => {
     expect(response.status).toBe(307);
   });
 
+  // The redirect-hop cases with a relaxation enabled. Each flag must widen only its own axis: a
+  // naive split that treats them as one "insecure" bit regresses exactly here.
+  it("allowing http does not open a redirect into cloud metadata", async () => {
+    const hops = stubChain({ "http://mcp.example.com/mcp": "http://169.254.169.254/latest/" });
+    const response = await guardedFetch(
+      "http://mcp.example.com/mcp", { method: "POST" }, { allowHttp: true });
+    expect(hops.map(hop => hop.url)).toEqual(["http://mcp.example.com/mcp"]);
+    expect(response.status).toBe(307);
+  });
+
+  it("allowing private hosts does not downgrade a redirect to plaintext", async () => {
+    const hops = stubChain({ "https://mcp.internal.corp/mcp": "http://mcp.internal.corp/plain" });
+    const response = await guardedFetch(
+      "https://mcp.internal.corp/mcp", { method: "POST" }, { allowPrivateHosts: true });
+    expect(hops.map(hop => hop.url)).toEqual(["https://mcp.internal.corp/mcp"]);
+    expect(response.status).toBe(307);
+  });
+
+  it("strips credentials across internal origins even when private hosts are allowed", async () => {
+    // "Both hops are internal" is not "same trust domain": one internal server must not receive
+    // another's bearer. The cross-origin check is deliberately flag-independent.
+    const hops = stubChain({ "https://10.1.2.3/mcp": "https://10.1.2.4/other" });
+    await guardedFetch("https://10.1.2.3/mcp", {
+      headers: { Authorization: "Bearer secret", "Mcp-Session-Id": "session" },
+    }, { allowPrivateHosts: true });
+    expect(hops.map(hop => hop.url)).toEqual(["https://10.1.2.3/mcp", "https://10.1.2.4/other"]);
+    expect(hops[1].authorization).toBe(null);
+    expect(hops[1].sessionId).toBe(null);
+  });
+
   it("follows an allowed redirect and keeps credentials within the origin", async () => {
     const hops = stubChain({ "https://mcp.example.com/mcp": "https://mcp.example.com/v2/mcp" });
     const response = await guardedFetch("https://mcp.example.com/mcp", {
@@ -149,16 +179,28 @@ describe("isAllowedUrl", () => {
     expect(isAllowedUrl("not a url")).toBe(false);
   });
 
-  it("relaxes both for local development", () => {
-    expect(isAllowedUrl("http://localhost:8080/mcp", { allowInsecure: true })).toBe(true);
+  it("widens only the protocol when http is allowed", () => {
+    expect(isAllowedUrl("http://mcp.example.com/mcp", { allowHttp: true })).toBe(true);
+    expect(isAllowedUrl("https://127.0.0.1/mcp", { allowHttp: true })).toBe(false);
+    expect(isAllowedUrl("http://127.0.0.1/mcp", { allowHttp: true })).toBe(false);
   });
 
-  // `allowInsecure` widens the protocol to `http:` and nothing further. This guards every redirect
-  // hop in `guardedFetch`, so a blanket allowance would make `Location: file:///etc/passwd` a
-  // reachable target whenever local development is enabled.
-  it("still refuses non-http(s) schemes when insecure is allowed", () => {
+  it("widens only the host when private hosts are allowed", () => {
+    expect(isAllowedUrl("https://127.0.0.1/mcp", { allowPrivateHosts: true })).toBe(true);
+    expect(isAllowedUrl("http://mcp.example.com/mcp", { allowPrivateHosts: true })).toBe(false);
+  });
+
+  it("relaxes both for local development", () => {
+    expect(isAllowedUrl("http://localhost:8080/mcp",
+      { allowHttp: true, allowPrivateHosts: true })).toBe(true);
+  });
+
+  // Neither relaxation widens the scheme beyond `http:`. This guards every redirect hop in
+  // `guardedFetch`, so a blanket allowance would make `Location: file:///etc/passwd` a reachable
+  // target whenever local development is enabled.
+  it("still refuses non-http(s) schemes with both relaxations on", () => {
     for (const url of ["file:///etc/passwd", "ftp://host/x", "data:text/plain,x"]) {
-      expect(isAllowedUrl(url, { allowInsecure: true })).toBe(false);
+      expect(isAllowedUrl(url, { allowHttp: true, allowPrivateHosts: true })).toBe(false);
     }
   });
 });

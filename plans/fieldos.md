@@ -181,15 +181,31 @@ which makes workerd reject reserved ranges *after DNS resolution, on every reque
 redirect hop*. Disabling it removes DNS-rebinding protection **wholesale**.
 
 Compensating controls, all required:
-1. **Internal-CIDR allowlist**, implemented **once, centrally** in `gatekeeper-shared` — an
-   allowlist of the customer's known internal ranges, not a blocklist. Inverted trust, inverted
-   posture.
+1. **Internal-CIDR allowlist — in the workerd `network` service, not in TypeScript.** *(Corrected
+   2026-08-10.)* This originally said `gatekeeper-shared`. That is the wrong layer: a TypeScript
+   check runs *before* DNS resolution and so cannot see a hostname that resolves — or rebinds — to
+   an internal address. `workerd.capnp` (:820-824) documents that `network.allow`/`deny` accept
+   literal CIDR blocks alongside `public`/`private`/`local`, and (:838-840) that for a hostname the
+   rules "filter the addresses returned by the lookup … the system will behave as if the DNS entry
+   did not exist". Verified by execution: `allow = ["public", "192.168.0.0/16"]` reaches a server on
+   192.168.0.103 while still refusing 127.0.0.1 and 10.1.2.3, for plain fetch *and* for WebSocket
+   upgrades (`restrictPeers()`). `run-workerd.mjs --allow` already passes CIDRs through verbatim;
+   what is wrong is only its `["public", "private"]` default.
+   **Granularity:** enumerate specific servers (`/32`), not subnets. A `/16` is 65,536 addresses —
+   typically the whole corporate network, including the K8s API, CI, and database admin panels.
+   workerd's own schema shows `allow = ["public", "private"]` as its *cautionary* example.
+   Beware `ExternalServer` (:744-802): it bypasses `network` **by design**, so if it is used its
+   addresses must be validated at config-generation time rather than trusted from admin input.
 2. **Do not reuse `MCP_ALLOW_INSECURE`** — it also disables the protocol check, an orthogonal
-   control worth keeping.
+   control worth keeping. *(Done: split into `MCP_ALLOW_HTTP` and `MCP_ALLOW_PRIVATE_HOSTS`.)*
+   The TypeScript blocklist stays, but as what it already claims to be — a legible refusal at
+   connect time, which the capnp layer structurally cannot give (it fails opaquely at connect).
 3. **Redirect-hop revalidation** as an explicit test case: allowed → disallowed must be blocked.
-   Extend `guardedFetch` (which already strips cross-origin credentials and refuses to replay a
-   body on 307/308); do not bypass it.
-4. **Private-CA TLS** — no connector handles it today, and an internal PKI is likely immediate.
+   `guardedFetch` already did this, along with cross-origin credential stripping and 307/308 body
+   replay refusal; what was missing were tests for the *flag-on* cases, now added.
+4. **Private-CA TLS** — cheaper than assumed: `tlsOptions.trustedCertificates` is a field on the
+   same `Network` struct as `allow`/`deny` (`workerd.capnp:844`, :992), so the customer's CA and
+   their internal ranges are configured in one block. No connector code needed.
 5. **Apply validation to HomeAssistant**, which has neither the flag nor any `isBlockedHost` check.
    It is the on-prem template *precisely because it skipped the control* — port its structure, not
    its absent validation.

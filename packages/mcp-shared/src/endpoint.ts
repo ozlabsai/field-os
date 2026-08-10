@@ -1,7 +1,7 @@
 // Validation for user-supplied MCP endpoint URLs, so the SSRF blocklist has one definition. A
 // gatekeeper pointed at an administrator-configured URL has no untrusted input to check.
 
-import { fetchOptions, type InsecureEnv } from "./fetch.js";
+import { fetchOptions, type FetchPolicyEnv } from "./fetch.js";
 
 // Result of validating a user-supplied endpoint.
 export type EndpointValidation = { ok: true; url: string } | { ok: false; reason: string };
@@ -61,9 +61,10 @@ export function isBlockedHost(hostname: string): boolean {
 
 // Validates and canonicalizes a user-supplied MCP endpoint.
 //
-// Requires HTTPS and rejects private/link-local/metadata hosts. `MCP_ALLOW_INSECURE` disables both
-// checks for local development, allowing HTTP and otherwise-blocked hosts.
-export function validateCustomEndpoint(env: InsecureEnv, input: string): EndpointValidation {
+// Requires HTTPS and rejects private/link-local/metadata hosts. `MCP_ALLOW_HTTP` and
+// `MCP_ALLOW_PRIVATE_HOSTS` relax one check each, independently: reaching an internal MCP server
+// over HTTPS does not require also accepting plaintext.
+export function validateCustomEndpoint(env: FetchPolicyEnv, input: string): EndpointValidation {
   const trimmed = input.trim();
   if (!trimmed) return { ok: false, reason: "Enter the MCP server's endpoint URL." };
 
@@ -74,11 +75,11 @@ export function validateCustomEndpoint(env: InsecureEnv, input: string): Endpoin
     return { ok: false, reason: "That is not a valid URL." };
   }
 
-  const insecureAllowed = fetchOptions(env).allowInsecure === true;
-  if (url.protocol !== "https:" && !(insecureAllowed && url.protocol === "http:")) {
+  const { allowHttp, allowPrivateHosts } = fetchOptions(env);
+  if (url.protocol !== "https:" && !(allowHttp && url.protocol === "http:")) {
     return { ok: false, reason: "The endpoint must use https://." };
   }
-  if (!insecureAllowed && isBlockedHost(url.hostname)) {
+  if (!allowPrivateHosts && isBlockedHost(url.hostname)) {
     return { ok: false, reason: "That host is not reachable from FieldOS." };
   }
 

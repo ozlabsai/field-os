@@ -227,7 +227,8 @@
       "shortName": "mcp",
       "vars": {
         "BASE_URL": "$PUBLIC_BASE_URL/gatekeeper/mcp",
-        "MCP_ALLOW_INSECURE": "false"
+        "MCP_ALLOW_HTTP": "false",
+        "MCP_ALLOW_PRIVATE_HOSTS": "false"
       }
     },
     "gatekeeper-mcp-portal": {
@@ -269,7 +270,8 @@
       "shortName": "mcp-portal",
       "vars": {
         "BASE_URL": "$PUBLIC_BASE_URL/gatekeeper/mcp-portal",
-        "MCP_ALLOW_INSECURE": "false"
+        "MCP_ALLOW_HTTP": "false",
+        "MCP_ALLOW_PRIVATE_HOSTS": "false"
       }
     },
     "gatekeeper-oidc": {

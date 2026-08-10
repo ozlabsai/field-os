@@ -51,7 +51,7 @@ export function readPortalConfig(env: Env): PortalConfig | null {
   // The same rule `guardedFetch` applies anyway. Enforcing it here means an `http://` typo hides the
   // connector rather than failing on the first request, with an error naming a URL the user never
   // saw.
-  if (url.protocol !== "https:" && !(fetchOptions(env).allowInsecure && url.protocol === "http:")) {
+  if (url.protocol !== "https:" && !(fetchOptions(env).allowHttp && url.protocol === "http:")) {
     return null;
   }
   // URL userinfo is an ambient credential: URL and fetch APIs can copy it into requests, while this

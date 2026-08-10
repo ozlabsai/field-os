@@ -3,7 +3,8 @@
 declare namespace Cloudflare {
   interface Env {
     BASE_URL?: string;
-    MCP_ALLOW_INSECURE?: string;
+    MCP_ALLOW_HTTP?: string;
+    MCP_ALLOW_PRIVATE_HOSTS?: string;
     MCP_CLIENT_NAME?: string;
   }
 

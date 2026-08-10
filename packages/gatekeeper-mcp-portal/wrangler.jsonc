@@ -52,8 +52,14 @@
   //     proxies, not by the administrator who chose the portal. Only set it where the upstreams
   //     themselves are trusted.
   "vars": {
-    // Set to "true" to permit http:// and private-network endpoints. Local development only.
-    "MCP_ALLOW_INSECURE": "false"
+    // "true" permits http:// endpoints. Local development, or a network where plaintext is an
+    // accepted risk.
+    "MCP_ALLOW_HTTP": "false",
+    // "true" permits private, loopback, link-local and cloud-metadata hosts -- for a portal on the
+    // deployment's own network. Note this widens every URL discovered from the portal, not just the
+    // configured one (see the WWW-Authenticate note above). What is actually reachable is still
+    // decided after DNS resolution by the runtime's outbound network policy, not by this flag.
+    "MCP_ALLOW_PRIVATE_HOSTS": "false"
   },
   "observability": {
     "enabled": true,

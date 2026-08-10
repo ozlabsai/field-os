@@ -9,11 +9,11 @@
 
 import { McpAuthRequiredError, McpClient, McpSessionExpiredError, type ToolCatalog }
   from "./client.js";
-import { fetchOptions, type InsecureEnv } from "./fetch.js";
+import { fetchOptions, type FetchPolicyEnv } from "./fetch.js";
 import { MAX_TOOLS_PER_SERVER } from "./tools.js";
 
 // The environment this module reads. Each Worker's own `Env` satisfies it structurally.
-export type ConnectionEnv = InsecureEnv & {
+export type ConnectionEnv = FetchPolicyEnv & {
   // Name this deployment reports to MCP servers during `initialize`.
   MCP_CLIENT_NAME?: string;
 };

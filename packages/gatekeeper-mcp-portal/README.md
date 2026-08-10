@@ -43,9 +43,11 @@ signatures unscoped, and 12 when scoped to one server.
 | `MCP_PORTAL_AUTH` | `oauth` (default), `none`, or `token`. |
 | `MCP_PORTAL_TOKEN` | Secret bearer token, for `MCP_PORTAL_AUTH: "token"`. |
 | `MCP_PORTAL_TRUST_ANNOTATIONS` | `true` to let upstream tool annotations drive auto-approval. Off by default; see below. |
-| `MCP_ALLOW_INSECURE` | `"true"` to disable the endpoint checks entirely: permits `http://` **and** private, loopback, link-local, and cloud-metadata hosts, for the portal and every OAuth URL discovered from it. Local dev only. |
+| `MCP_ALLOW_HTTP` | `"true"` permits `http://`, for the portal and every OAuth URL discovered from it. Nothing else. |
+| `MCP_ALLOW_PRIVATE_HOSTS` | `"true"` permits private, loopback, link-local and cloud-metadata hosts — for a portal on the deployment's own network. Widens every discovered URL too, not just the configured one. Only lifts the *pre-resolution* refusal; what is actually reachable is decided after DNS resolution by the runtime's outbound network policy. |
 
-Only `MCP_ALLOW_INSECURE` is set in the repo's `wrangler.jsonc`, pinned to `"false"` so the default
+Only `MCP_ALLOW_HTTP` and `MCP_ALLOW_PRIVATE_HOSTS` are set in the repo's `wrangler.jsonc`, both
+pinned to `"false"` so the default
 is explicit rather than merely absent. None of the others is, and a portal URL committed there would
 become the default for every deployment of this repo and would send their users' OAuth flows to
 whichever host it named, so it belongs in the deployment's own configuration — for Cloudflare's

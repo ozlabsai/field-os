@@ -191,7 +191,7 @@ export class GatekeeperVendor extends WorkerEntrypoint<Env> implements Gatekeepe
   }
 
   async getSupportedResources(): Promise<SupportedResource[]> {
-    return mcpResources(fetchOptions(this.env).allowInsecure === true);
+    return mcpResources(fetchOptions(this.env).allowHttp === true);
   }
 
   async getTypeScriptTypes(): Promise<string> {
@@ -249,7 +249,7 @@ export class GatekeeperUserImpl
   }
 
   async getSupportedResources(): Promise<SupportedResource[]> {
-    return mcpResources(fetchOptions(this.env).allowInsecure === true);
+    return mcpResources(fetchOptions(this.env).allowHttp === true);
   }
 
   async getGatekeeperClassFor(url: string): Promise<{

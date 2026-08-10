@@ -182,9 +182,9 @@ const SHARED_GATEKEEPER_CREDS = {
 const PASSTHROUGH_GATEKEEPER_VARS = {
   "gatekeeper-mcp-portal": [
     "MCP_PORTAL_URL", "MCP_PORTAL_NAME", "MCP_PORTAL_AUTH", "MCP_PORTAL_TOKEN",
-    "MCP_PORTAL_TRUST_ANNOTATIONS", "MCP_ALLOW_INSECURE",
+    "MCP_PORTAL_TRUST_ANNOTATIONS", "MCP_ALLOW_HTTP", "MCP_ALLOW_PRIVATE_HOSTS",
   ],
-  "gatekeeper-mcp": ["MCP_ALLOW_INSECURE"],
+  "gatekeeper-mcp": ["MCP_ALLOW_HTTP", "MCP_ALLOW_PRIVATE_HOSTS"],
 };
 
 for (const gk of gatekeepers) {
@@ -199,7 +199,7 @@ for (const gk of gatekeepers) {
     if (config.vars.CLIENT_SECRET === undefined) config.vars.CLIENT_SECRET = process.env[shared.secret];
   }
 
-  // The shell wins over the committed default, so `MCP_ALLOW_INSECURE=true` can override the
+  // The shell wins over the committed default, so `MCP_ALLOW_HTTP=true` can override the
   // `"false"` in wrangler.jsonc without editing it.
   for (const name of PASSTHROUGH_GATEKEEPER_VARS[gk.name] ?? []) {
     if (process.env[name] !== undefined) {
