@@ -4,6 +4,10 @@
   "description": "Shared Worker-side libraries; not a standalone deployable Worker.",
   "type": "module",
   "exports": {
+    "./unreachable": {
+      "types": "./src/unreachable.ts",
+      "import": "./src/unreachable.ts"
+    },
     "./logger": {
       "types": "./src/logger.ts",
       "import": "./src/logger.ts"

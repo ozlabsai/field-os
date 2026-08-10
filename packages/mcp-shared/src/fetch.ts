@@ -6,6 +6,7 @@
 // with `Authorization` dropped when a hop leaves the original origin. Unconditional rather than
 // opt-in, since a caller forgetting to opt in is the failure mode.
 
+import { describeUnreachable } from "@gadgets/backend-utils/unreachable";
 import { isBlockedHost } from "./endpoint.js";
 import type { FetchLike } from "@modelcontextprotocol/client";
 
@@ -151,7 +152,16 @@ export async function guardedFetch(
   const origin = new URL(url).origin;
 
   for (let hop = 0; ; hop++) {
-    const response = await fetch(current, { ...init, method, body, headers, redirect: "manual" });
+    let response: Response;
+    try {
+      response = await fetch(current, { ...init, method, body, headers, redirect: "manual" });
+    } catch (err) {
+      // The runtime reports a connection failure as an opaque reference token that names neither
+      // the cause nor the address. This is the last point that still knows the host, so say it
+      // here -- otherwise the user is shown a token for what is usually a configuration mistake.
+      const described = describeUnreachable(err, hostForMessage(current));
+      throw described === null ? err : new Error(described, { cause: err });
+    }
     if (!REDIRECT_STATUSES.has(response.status)) return response;
 
     const location = response.headers.get("Location");
