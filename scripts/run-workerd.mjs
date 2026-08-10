@@ -139,6 +139,42 @@ function serviceName(pkgName) {
   return pkgName; // wrangler.jsonc's `name` field is already a valid capnp identifier-safe string.
 }
 
+// The workers permitted to reach whatever `--allow` grants beyond the public internet. Everything
+// else is pinned to public-only.
+//
+// Deliberately one list here rather than a field in each package's wrangler.jsonc: this is a
+// security boundary, and a reviewer must be able to answer "who can reach the internal network?"
+// by reading one place. A per-package field would also let a package grant *itself* internal
+// reach, which is the network analogue of a gatekeeper asserting its own ambience.
+//
+// Membership is by dependency, not by trust -- each entry contacts a host the operator chose, and
+// on an isolated network that host is internal by definition:
+//   workshop-backend        self-hosted inference (ai-models.ts, `config.apiUrl`)
+//   gatekeeper-mcp/-portal  on-prem MCP servers (OZL-249)
+//   gatekeeper-homeassistant  the pasted instance URL (homeassistant-api.ts) -- this is the
+//                           on-prem template; a public Home Assistant is the unusual case
+//   gatekeeper-oidc         the issuer's discovery document (identity.ts discoverEndpoints); the
+//                           README's own examples are Keycloak, Authentik and ADFS, which are
+//                           normally on-prem
+//
+// Everything absent from this list has no operator-configured endpoint to reach: gatekeeper-context
+// and gatekeeper-scheduler own their state in Durable Objects, gatekeeper-github talks to GitHub
+// (public, or an operator's GHES once OZL-220 lands -- which will need adding here), and the router
+// reaches other workers through service bindings rather than the network.
+const INTERNAL_REACH = new Set([
+  "workshop-backend",
+  "gatekeeper-mcp",
+  "gatekeeper-mcp-portal",
+  "gatekeeper-homeassistant",
+  "gatekeeper-oidc",
+]);
+
+// The outbound service a worker gets. Public-only is the default, so a newly added package is
+// safe until someone deliberately lists it above.
+function outboundServiceFor(pkgName) {
+  return INTERNAL_REACH.has(pkgName) ? "internet" : "internet-public";
+}
+
 function bindingNameFor(gatekeeperPkgName) {
   return gatekeeperPkgName.toUpperCase().replaceAll("-", "_");
 }
@@ -256,7 +292,7 @@ ${moduleLines.join("\n")}
   ],
   compatibilityDate = ${capnpString(config.compatibility_date)},
   compatibilityFlags = [${compatibilityFlags(config).map(capnpString).join(", ")}],
-  globalOutbound = "internet",${doNamespaceLines.length > 0 ? `
+  globalOutbound = ${capnpString(outboundServiceFor(pkgName))},${doNamespaceLines.length > 0 ? `
   durableObjectNamespaces = [
 ${doNamespaceLines.join("\n")}
   ],
@@ -316,7 +352,7 @@ if (included.some((p) => p.name === "router")) {
 const assetsWorker :Workerd.Worker = (
   modules = [ (name = "assets.js", esModule = embed ${capnpString(relative(args.out, join(runtimeSrc, "assets.js")))}) ],
   compatibilityDate = "2026-02-02",
-  globalOutbound = "internet",
+  globalOutbound = "internet-public",
   bindings = [ (name = "DIST", service = "dist") ],
 );`);
   serviceEntries.push(`    (name = "assets", worker = .assetsWorker),`);
@@ -333,7 +369,14 @@ serviceEntries.push(`    (name = "do-disk", disk = (path = ${capnpString(doDiskP
 
 // Outbound network. NEVER emit `deny = ["public"]` — that's a fatal config error. An empty allow
 // list (--allow=none) is expressed as `allow = []`, not a `deny`.
+//
+// Two services, not one. `--allow` describes what the *deployment* may reach -- typically the
+// internal inference server, and later the operator's declared MCP hosts -- and only the workers
+// that actually have such a dependency get it. Everything else is pinned to public-only, so a bug
+// or a compromised dependency in (say) the scheduler cannot reach RFC1918 space just because the
+// MCP connector legitimately must. See INTERNAL_REACH below for who is which.
 serviceEntries.push(`    (name = "internet", network = (allow = [${args.allow.map(capnpString).join(", ")}])),`);
+serviceEntries.push(`    (name = "internet-public", network = (allow = ["public"])),`);
 
 // The socket below points `service = "router"`, which resolves to the "router" entry the worker
 // loop already pushed — no separate alias entry needed (Service has no `service` field of its
