@@ -169,6 +169,12 @@ pnpm lint     # oxlint + recursive tsc --noEmit; errors must be zero
 pnpm test
 ```
 
+`.github/workflows/ci.yml` runs `pnpm lint`, `pnpm build` and `pnpm test` on every pull request.
+Note it runs **`pnpm build`**, which the local gate above does not — `build` and `types:check` are
+not the same command, so a build-only failure will not show up locally unless you run it. Actions
+had never executed on this repository until 2026-08-10: GitHub disables it by default on forks, and
+this is one, so every PR before that date was gated by a developer's local run alone (OZL-253).
+
 ## Deliberate limitations, stated so they are not rediscovered
 
 - A runaway gadget interrupts the deployment until the watchdog restarts it (OZL-239).
