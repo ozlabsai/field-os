@@ -13,7 +13,7 @@ import {
   getModel,
   UserGatewayRouting,
 } from "./ai-models";
-import { AgentTurnError, completeText } from "./ai-invoke";
+import { AgentTurnError, completeText, shouldReportTurnFailure } from "./ai-invoke";
 import {
   AiGatewayLogRetryableError,
   getAiGatewayConfig,
@@ -30,6 +30,7 @@ import { UserDurableObject, UserAiModelRecord, type UserChatContext, type Worksp
 import { AgentSpawnerBinding } from "./agent-spawner-binding";
 import { recordAnalytics } from "./analytics";
 import { reportIssue } from "@gadgets/backend-utils/error-reporting";
+import { describeUnreachable } from "@gadgets/backend-utils/unreachable";
 import type { ProductAnalyticsConnectionType, ProductAnalyticsGadgetInput } from "./analytics";
 import { checkUsageAndBalance } from "./ai-gateway-billing/limits/usage-checker";
 import { completeAgentCatalogSnapshot, normalizeAgentCatalog } from "./agent-catalog";
@@ -4051,10 +4052,11 @@ class OverseerImpl implements AgentHooks {
       // one was observed.
       let apiError = err instanceof AgentTurnError ? err : null;
 
-      // Report unexpected failures for triage. Skip expected provider 4xx (auth,
-      // rate limit, quota/billing), which are ordinary control flow, not incidents.
+      // Report unexpected failures for triage, skipping the two kinds that are not incidents:
+      // expected provider 4xx, and a request that never reached a provider at all. Logged below
+      // either way. See shouldReportTurnFailure.
       const apiStatus = apiError?.statusCode;
-      if (apiStatus === undefined || apiStatus >= 500) {
+      if (shouldReportTurnFailure(err, apiStatus)) {
         reportIssue("overseer.run-agent", err, {
           attributes: obsContext.get(),
           http: apiStatus === undefined
@@ -4063,7 +4065,11 @@ class OverseerImpl implements AgentHooks {
         });
       }
 
-      let errorMessage = stringifyError(err);
+      // A connection failure reaches here as the SDK's constant "Connection error." -- no host, no
+      // port, nothing an operator could act on. Name the endpoint they configured instead; for a
+      // self-hosted server that address is the whole diagnosis.
+      let errorMessage = describeUnreachable(err, aiModel.config.apiUrl ?? "the inference server")
+          ?? stringifyError(err);
       if (apiError) {
         turnLogger.error("runAgent failed", {
           event: "agent.run.failed", statusCode: apiError.statusCode, error: err,
