@@ -152,6 +152,15 @@ describe("isAllowedUrl", () => {
   it("relaxes both for local development", () => {
     expect(isAllowedUrl("http://localhost:8080/mcp", { allowInsecure: true })).toBe(true);
   });
+
+  // `allowInsecure` widens the protocol to `http:` and nothing further. This guards every redirect
+  // hop in `guardedFetch`, so a blanket allowance would make `Location: file:///etc/passwd` a
+  // reachable target whenever local development is enabled.
+  it("still refuses non-http(s) schemes when insecure is allowed", () => {
+    for (const url of ["file:///etc/passwd", "ftp://host/x", "data:text/plain,x"]) {
+      expect(isAllowedUrl(url, { allowInsecure: true })).toBe(false);
+    }
+  });
 });
 
 describe("sdkFetch", () => {
