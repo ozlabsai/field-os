@@ -2019,7 +2019,23 @@ class OverseerImpl implements AgentHooks {
   }
 
   // Apply a Yjs-encoded (V2) update to the code, incrementing the code version.
+  //
+  // The `code` log is append-only and replayed from the start on every load (see buildYDoc()),
+  // so an update that fails to decode is not a transient error: it throws on every subsequent
+  // load of the workspace, forever, with no repair path. Notably a *V1*-encoded update is not
+  // rejected by applyUpdateV2 at parse time -- it misparses into a garbage-length array and
+  // surfaces much later as "Invalid typed array length". So validate before the put, where the
+  // caller can still see the failure.
   updateCode(update: Uint8Array): number {
+    try {
+      Y.applyUpdateV2(new Y.Doc(), update);
+    } catch (err) {
+      throw new Error(
+          `updateCode() rejected a malformed Yjs update (expected Y.encodeStateAsUpdateV2 ` +
+          `output, ${update.length} bytes): ${err instanceof Error ? err.message : err}`,
+          {cause: err});
+    }
+
     let version = this.bumpVersion();
     let timestamp = new Date();
     this.storage.code.put({version, timestamp, update});
