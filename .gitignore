@@ -19,7 +19,10 @@ packages/workshop-backend/src/generated/browser-export-runtime.txt
 
 # Cloudflare Workers
 .wrangler/
+# Bare `.env` only matched the exact name, so `.env.local` (and any other variant) was untracked
+# but NOT ignored -- one `git add -A` from being committed. Cover the variants.
 .env
+.env.*
 
 # Local dev secrets (loaded by run-dev-server.js)
 .dev.vars*
