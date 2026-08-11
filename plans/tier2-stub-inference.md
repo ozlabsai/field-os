@@ -76,7 +76,33 @@ That error is itself the proof the sandbox executed — `return 42;` is illegal 
 so workerd rejected it *inside the loaded worker*. Real gadget code for a test should be a proper
 module (the code becomes `agent.js` under the fixed `harness.js` main module, `overseer.ts:5456`).
 
-`/v1/models` was never requested. Usage/token fields were never required.
+`/v1/models` was never requested. Usage/token fields were never required. Nor is `data: [DONE]`,
+nor a correct `Content-Type` — but send both anyway; they cost nothing and match what a real server
+does.
+
+### Traps, each verified against pi's own code
+
+These fail in ways that look like product bugs rather than stub bugs, which is what makes them
+worth listing.
+
+* **`arguments` must be a JSON *string*, not an object.** An object yields `arguments: []` and
+  `Validation failed for tool "executeCode"` — and the turn still makes **two requests and looks
+  green**. Any assertion based only on request count passes while `executeCode` never ran. Assert
+  on the tool *result text*, not the call count.
+* **`finish_reason` is mandatory**; omitting it throws `Stream ended without finish_reason`.
+* **`finish_reason: "length"` is poison** — it fails every tool call in the message *unexecuted*.
+* **Always send a unique tool-call `id`.** pi tolerates its absence (replaying `tool_call_id: ""`),
+  but the Workshop keys `toolCallId` on it across `toolCallNotes`, `codePreviewManager` and
+  `executeCodeStreamManager` (`agent.ts:2870-2900`), so two calls would collide.
+* **The loop runs `while (hasMoreToolCalls)`** (`agent-loop.js:88`) up to `turnCount >= 30`
+  (`agent.ts:3045`). A script that keeps returning tool calls spins. Make the terminating
+  `finish_reason: "stop"` entry *sticky*.
+* **Two env preconditions**, both easy to miss: `CF_AI_GATEWAY` must be **unset** (otherwise
+  `getModel` takes the gateway branch and *ignores `apiUrl`*, `ai-models.ts:379-382`), and the user
+  must have no connected Cloudflare account (`options.userGateway` short-circuits first, `:371`).
+  Neither holds in the tier-2 stack today, but a future fixture could break both silently.
+* **Leave `setQuickModel` unset**, so chat-title generation never fires and the stub sees only
+  agent turns.
 
 ---
 

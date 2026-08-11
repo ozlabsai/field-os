@@ -47,11 +47,17 @@ export const CORE_STACK = ["workshop-backend", "router"];
  * @param {string[]} [options.only] - Packages to include; defaults to {@link CORE_STACK}.
  *   workshop-backend and router are always included by the generator regardless.
  * @param {string[]} [options.allow] - `--allow` entries. Defaults to `["public"]`.
+ * @param {string} [options.inferenceHost] - `host:port` of a stub inference server (see
+ *   stub-inference.mjs), e.g. `"127.0.0.1:1234"`. Passed to the generator as
+ *   `FIELDOS_INTERNAL_HOSTS=inference=<host>`, which is read at BUILD time -- so the stub must
+ *   already be listening before `startStack()` is called, not merely before workerd boots.
+ *   Omitting it leaves the existing default behavior (no internal hosts declared) unchanged.
  * @returns {Promise<{base: string, url: URL, outDir: string, stop: () => void}>}
  *   `base` is the origin workerd bound; `url` is the same as a URL, for rpc-client's `connect()`.
  *   `stop()` kills workerd and removes the build directory.
  */
-export async function startStack({ only = CORE_STACK, allow = ["public"] } = {}) {
+export async function startStack(
+    { only = CORE_STACK, allow = ["public"], inferenceHost } = {}) {
   mkdirSync(BUILD_ROOT, { recursive: true });
   const outDir = mkdtempSync(join(BUILD_ROOT, "stack-"));
 
@@ -63,7 +69,13 @@ export async function startStack({ only = CORE_STACK, allow = ["public"] } = {})
       "--build-only", "--out", outDir,
       "--only", only.join(","),
       "--allow", allow.join(","),
-    ], { cwd: ROOT, stdio: "pipe" });
+    ], {
+      cwd: ROOT,
+      stdio: "pipe",
+      env: inferenceHost
+          ? { ...process.env, FIELDOS_INTERNAL_HOSTS: `inference=${inferenceHost}` }
+          : process.env,
+    });
   } catch (err) {
     rmSync(outDir, { recursive: true, force: true });
     // execFileSync attaches the child's stderr to the thrown error; it is the only place the
