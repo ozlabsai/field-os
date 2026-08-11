@@ -55,6 +55,17 @@ brand swaps sitting in files upstream edits constantly — `github.ts` takes 18 
 cheap win: revert the *doc-comment* rebrands in `api.ts` (a file upstream touched 55 times in 90
 days). They are comments; they change nothing a user sees.
 
+**Done, and smaller than estimated.** `api.ts` turned out to hold exactly **one** rebrand comment
+(the "default Cloudflare OS mark" line on `setSiteLogo`), now reverted. The rest of our comment
+divergence there is genuine documentation of our own features — session revocation, org separation
+— which is worth its conflict cost and must not be reverted to reduce a diff.
+
+Worth recording because the estimate was wrong in an instructive direction: the first real port
+(`b2a51b5`) **auto-merged `api.ts` cleanly** despite our `+42/−5`, so the feared collision did not
+materialise at all. Line count in a hot file is a weak predictor of conflict; what actually cost
+time was clean-merging code that failed to *compile* against our differently-configured tree (two
+unused `@ts-expect-error` directives, TS2578). Budget for that, not for hunk counts.
+
 ## Triage
 
 Apply in order, **stop at the first match**. Designed so almost every commit exits at rule 1 or 2

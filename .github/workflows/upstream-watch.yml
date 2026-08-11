@@ -1,0 +1,153 @@
+name: Upstream watch
+
+# Weekly check for upstream commits that touch files we've modified. See docs/upstream-sync.md
+# for the process this implements and docs/upstream-ports.md for the triage ledger.
+#
+# Scoping is what makes this signal instead of noise: upstream ships 40-70 commits a week, but
+# almost all of them touch files we never modified and are irrelevant. Only commits that touch a
+# file we changed (relative to the fork point) are worth a human decision.
+
+on:
+  schedule:
+    # Every Monday 09:00 UTC.
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  UPSTREAM_URL: https://github.com/cloudflare/cloudflare-os
+
+jobs:
+  watch:
+    name: Check upstream for watched-file changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Need full history: the watch list and the commit range both walk back to the fork
+          # point, which a shallow clone would not contain.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Add upstream remote and fetch
+        run: |
+          set -euo pipefail
+          git remote add upstream "${UPSTREAM_URL}"
+          git fetch upstream
+
+      - name: Compute watched files and scoped commit list
+        id: scope
+        run: |
+          set -euo pipefail
+
+          # The watch list is generated fresh every run, not read from a checked-in file: a
+          # hand-maintained list goes stale silently and the watcher goes quiet on exactly the
+          # file that needed watching. It's every file we've modified relative to the fork point,
+          # computed the same way docs/upstream-sync.md documents it.
+          merge_base=$(git merge-base HEAD upstream/main)
+          git diff --name-only --diff-filter=M "${merge_base}" HEAD > watched-files.txt
+          watch_count=$(wc -l < watched-files.txt | tr -d ' ')
+          echo "watched ${watch_count} files (fork point ${merge_base})"
+
+          # The high-water mark is manual and load-bearing (see docs/upstream-ports.md): cherry-
+          # picking creates no ancestry, so it can't be derived from merge-base. Parse it, don't
+          # compute it.
+          hwm=$(grep -oE '\*\*Triaged through: `[0-9a-f]+`' docs/upstream-ports.md | head -1 | grep -oE '[0-9a-f]{7,40}')
+          if [ -z "${hwm}" ]; then
+            echo "::error::could not parse high-water mark from docs/upstream-ports.md"
+            exit 1
+          fi
+          echo "high-water mark: ${hwm}"
+
+          if [ ! -s watched-files.txt ]; then
+            echo "no watched files; nothing to scope to"
+            : > commits.txt
+          else
+            # Filenames come from our own git tree, not from upstream, so word-splitting them
+            # into a pathspec here is safe (matches the pattern docs/upstream-sync.md uses).
+            watched=$(tr '\n' ' ' < watched-files.txt)
+            # `%H|%ad|%s` has no trailing newline after the last record, and `while read` returns
+            # non-zero on that final partial read -- fatal under `set -e`. `git log` always adds
+            # one more with `echo`.
+            git log --reverse --pretty=format:'%H|%ad|%s' --date=short "${hwm}..upstream/main" -- $watched > commits.txt
+            echo >> commits.txt
+          fi
+
+          commit_count=$(grep -c . commits.txt || true)
+          echo "scoped commits: ${commit_count}"
+
+          echo "watch_count=${watch_count}" >> "$GITHUB_OUTPUT"
+          echo "hwm=${hwm}" >> "$GITHUB_OUTPUT"
+          echo "commit_count=${commit_count}" >> "$GITHUB_OUTPUT"
+
+      # Commit subjects are attacker-influencable in principle (they come from upstream), so they
+      # never touch a `run:` block via ${{ }} interpolation -- they're written to files here and
+      # read back by later steps as file content / env vars instead.
+      - name: Build issue body
+        if: steps.scope.outputs.commit_count != '0'
+        env:
+          HWM: ${{ steps.scope.outputs.hwm }}
+          WATCH_COUNT: ${{ steps.scope.outputs.watch_count }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Weekly upstream watch found commits touching files we've modified."
+            echo
+            echo "Triaged through: \`${HWM}\`"
+            echo "Watched files: ${WATCH_COUNT}"
+            echo
+            echo "Triage each against docs/upstream-sync.md and record the verdict in docs/upstream-ports.md."
+            echo
+            echo "| sha | date | subject | watched files touched |"
+            echo "|---|---|---|---|"
+          } > issue-body.md
+
+          # `git show` inside the loop body must not read the loop's own stdin (commits.txt),
+          # or later iterations silently vanish -- redirect it from /dev/null explicitly.
+          while IFS='|' read -r sha date subject; do
+            [ -z "${sha}" ] && continue
+            files=$(git show --stat --pretty=format: "${sha}" -- $(tr '\n' ' ' < watched-files.txt) < /dev/null \
+              | grep '|' | awk '{print $1}' | tr '\n' ' ')
+            {
+              printf '| `%s` | %s | ' "${sha:0:7}" "${date}"
+              printf '%s' "${subject}" | sed 's/|/\\|/g'
+              printf ' | %s |\n' "${files}"
+            } >> issue-body.md
+          done < commits.txt
+
+          cat issue-body.md
+
+      - name: Find existing open watch issue
+        if: steps.scope.outputs.commit_count != '0'
+        id: existing
+        run: |
+          set -euo pipefail
+          # Idempotent: creates the label on first run, no-ops afterward. `gh issue create --label`
+          # fails outright if the label doesn't exist yet, so this can't be skipped.
+          gh label create upstream-watch --repo "${GITHUB_REPOSITORY}" \
+            --color ededed --description "Weekly upstream-watch report" --force
+          number=$(gh issue list --repo "${GITHUB_REPOSITORY}" --label upstream-watch --state open \
+            --json number --jq '.[0].number // empty')
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update watch issue
+        if: steps.scope.outputs.commit_count != '0'
+        env:
+          HWM: ${{ steps.scope.outputs.hwm }}
+          COMMIT_COUNT: ${{ steps.scope.outputs.commit_count }}
+          ISSUE_NUMBER: ${{ steps.existing.outputs.number }}
+        run: |
+          set -euo pipefail
+          title="Upstream watch: ${COMMIT_COUNT} commit(s) since ${HWM}"
+          if [ -n "${ISSUE_NUMBER}" ]; then
+            gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" --body-file issue-body.md
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" --body-file issue-body.md --label upstream-watch
+          fi
