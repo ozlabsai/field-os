@@ -51,5 +51,8 @@ CLAUDE.md
 # workerd DO storage created by fieldos-runtime tests
 packages/fieldos-runtime/__tests__/fixture/dodata/
 
+# workerd DO storage created by the tier-1 durability test (packages/workerd-tests)
+packages/workerd-tests/__tests__/fixture-do-durability/dodata/
+
 # standalone workerd build output and DO state (scripts/run-workerd.mjs)
 .workerd/
