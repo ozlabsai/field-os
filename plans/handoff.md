@@ -194,3 +194,5 @@ before that date was gated by a developer's local run alone (OZL-253).
 - Gadget PDF export is unavailable — no `BROWSER` binding off-platform. It degrades cleanly.
 - `webFetch` document conversion is unavailable; it falls back to plain text and is near-moot on an
   isolated network anyway.
+
+<!-- CI skip-path proof; removed before merge. -->
