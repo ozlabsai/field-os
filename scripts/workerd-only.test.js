@@ -83,6 +83,26 @@ describe("--only", () => {
         "an unknown --only entry should be fatal and name itself");
   });
 
+  // --interceptor must reach EVERY worker, not just the ones with a network service. The assets
+  // worker used to hardcode its own globalOutbound and so escaped the first version of this.
+  it("routes every worker's globalOutbound to the interceptor", () => {
+    const capnp = build(["--only", "workshop-backend,router", "--interceptor"]);
+    const outbound = [...capnp.matchAll(/globalOutbound = "([a-z0-9-]+)"/g)].map((m) => m[1]);
+    assert.ok(outbound.length > 0, "expected some workers to declare globalOutbound");
+    assert.deepEqual([...new Set(outbound)], ["test-interceptor"],
+        "every worker must route to the interceptor; a worker that keeps a network service " +
+        "could reach the internet during a test that claims nothing escaped");
+    assert.match(capnp, /\(name = "test-interceptor", worker = \./);
+    // The readback socket, without which a test cannot tell "nothing escaped" from "nothing was
+    // watching".
+    assert.match(capnp, /\(name = "interceptor", address = "127\.0\.0\.1:0"/);
+  });
+
+  it("emits no interceptor without the flag", () => {
+    const capnp = build(["--only", "workshop-backend,router"]);
+    assert.ok(!capnp.includes("test-interceptor"), "interceptor must be opt-in");
+  });
+
   it("leaves the default (no --only) stack at every gatekeeper", () => {
     const capnp = build([]);
     assert.equal(serviceNames(capnp).filter((n) => n.startsWith("gatekeeper-")).length, 7);

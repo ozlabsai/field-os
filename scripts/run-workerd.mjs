@@ -6,6 +6,7 @@
 //
 // Usage: node scripts/run-workerd.mjs [--out .workerd] [--port 8080] [--allow public,private]
 //                                      [--build-only] [--no-watchdog] [--only <pkg,...>]
+//                                      [--interceptor]
 //                                      [--watchdog-interval 5000] [--watchdog-failures 3]
 
 import { execFileSync, spawn } from "node:child_process";
@@ -34,6 +35,10 @@ const ALL_GATEKEEPERS = [
 // The two workers every deployment shape needs: the router is the socket's target, and the
 // backend is what it forwards /api to. Neither is ever subsettable by --only.
 const CORE_PACKAGES = ["workshop-backend", "router"];
+
+// Service name for `--interceptor`'s recording stand-in for the network. Hyphenated to match the
+// other generated service names (`internet-public`, `net-<pkg>`).
+const INTERCEPTOR_SERVICE = "test-interceptor";
 
 // workerd's `network` allow list accepts these alongside CIDR blocks (workerd.capnp:826-832).
 const ALLOW_KEYWORDS = new Set(["public", "private", "local", "network", "unix", "unix-abstract"]);
@@ -84,6 +89,7 @@ function parseArgs(argv) {
   const args = {
     out: join(ROOT, ".workerd"), port: 8080, allow: ["public", "private"], buildOnly: false,
     watchdog: true, watchdogInterval: 5000, watchdogFailures: 3, only: undefined,
+    interceptor: false,
   };
   for (let i = 0; i < argv.length; i++) {
     // Accept both `--flag value` and `--flag=value`.
@@ -103,7 +109,8 @@ function parseArgs(argv) {
       args.allow = raw === "none" ? [] : raw.split(",").map((s) => s.trim()).filter(Boolean);
     } else if (a === "--only") {
       args.only = nextValue().split(",").map((s) => s.trim()).filter(Boolean);
-    } else if (a === "--build-only") args.buildOnly = true;
+    } else if (a === "--interceptor") args.interceptor = true;
+    else if (a === "--build-only") args.buildOnly = true;
     else if (a === "--no-watchdog") args.watchdog = false;
     else if (a === "--watchdog-interval") args.watchdogInterval = Number.parseInt(nextValue(), 10);
     else if (a === "--watchdog-failures") args.watchdogFailures = Number.parseInt(nextValue(), 10);
@@ -279,6 +286,11 @@ const INTERNAL_REACH = new Map([
 // as it did before FIELDOS_INTERNAL_HOSTS existed. Declaring hosts *adds* that role's addresses on
 // top -- the narrowing it buys is that other workers do not get them, not that this one gets less.
 function outboundServiceFor(pkgName) {
+  // --interceptor overrides everything: every worker's global fetch() goes to one recording
+  // worker instead of any network service. That is the point -- it must be impossible for a
+  // worker to reach the network by being on some list, so this deliberately ignores
+  // INTERNAL_REACH rather than composing with it.
+  if (args.interceptor) return INTERCEPTOR_SERVICE;
   return INTERNAL_REACH.has(pkgName) ? outboundServiceName(pkgName) : "internet-public";
 }
 
@@ -465,7 +477,7 @@ if (included.some((p) => p.name === "router")) {
 const assetsWorker :Workerd.Worker = (
   modules = [ (name = "assets.js", esModule = embed ${capnpString(relative(args.out, join(runtimeSrc, "assets.js")))}) ],
   compatibilityDate = "2026-02-02",
-  globalOutbound = "internet-public",
+  globalOutbound = ${capnpString(outboundServiceFor("assets"))},
   bindings = [ (name = "DIST", service = "dist") ],
 );`);
   serviceEntries.push(`    (name = "assets", worker = .assetsWorker),`);
@@ -479,6 +491,25 @@ const assetsWorker :Workerd.Worker = (
 const doDiskPath = join(args.out, "do-disk");
 mkdirSync(doDiskPath, { recursive: true });
 serviceEntries.push(`    (name = "do-disk", disk = (path = ${capnpString(doDiskPath)}, writable = true)),`);
+
+// --interceptor: one worker service that records and refuses every outbound request, named as
+// every worker's globalOutbound (see outboundServiceFor). The network services below are still
+// emitted -- nothing references them in this mode, and leaving them keeps the two paths' configs
+// diffable.
+//
+// This is test scaffolding, not a control: it makes the deployment unable to reach anything.
+// Its value is that it sits BELOW the isolate, so no worker (including a dynamically-loaded
+// gadget, which inherits its parent's globalOutbound unless it sets its own) can bypass it the
+// way it could a patched globalThis.fetch.
+if (args.interceptor) {
+  workerLines.push(`
+const ${constName(INTERCEPTOR_SERVICE)} :Workerd.Worker = (
+  modules = [ (name = "interceptor.js", esModule = embed ${capnpString(relative(args.out, join(runtimeSrc, "interceptor.js")))}) ],
+  compatibilityDate = "2026-02-02",
+);`);
+  serviceEntries.push(
+      `    (name = ${capnpString(INTERCEPTOR_SERVICE)}, worker = .${constName(INTERCEPTOR_SERVICE)}),`);
+}
 
 // Outbound network. NEVER emit `deny = ["public"]` — that's a fatal config error. An empty allow
 // list (--allow=none) is expressed as `allow = []`, not a `deny`.
@@ -518,7 +549,13 @@ const config :Workerd.Config = (
   services = [
 ${serviceEntries.join("\n")}
   ],
-  sockets = [ (name = "http", address = "*:${args.port}", http = (), service = "router") ],
+  sockets = [
+    (name = "http", address = "*:${args.port}", http = (), service = "router"),${args.interceptor ? `
+    # --interceptor only: a second socket straight onto the interceptor, so a test can read back
+    # what was attempted (GET /__fieldos_intercepted). Port 0 lets the OS assign one, which
+    # workerd reports through --control-fd; a fixed port would collide with a parallel run.
+    (name = "interceptor", address = "127.0.0.1:0", http = (), service = ${capnpString(INTERCEPTOR_SERVICE)}),` : ""}
+  ],
 );
 `;
 
@@ -531,16 +568,24 @@ console.log(`\nwrote ${configPath}`);
 // Print the reachability actually emitted. A refused connection is undiagnosable at runtime -- an
 // opaque token to the caller, an addressless line in the log (OZL-251) -- so this is where an
 // operator gets to see what they granted, and to which worker, without reading generated capnp.
-console.log(`\noutbound reach (--allow ${args.allow.join(",") || "none"}):`);
-for (const [pkgName, roles] of INTERNAL_REACH) {
-  if (!included.some((p) => p.name === pkgName)) continue;
-  const addresses = roles.flatMap((role) => internalHosts.addresses.get(role) ?? []);
-  console.log(addresses.length > 0
-      ? `  ${pkgName}: ${[...args.allow, ...addresses].join(", ")} (${roles.join(", ")})`
-      : `  ${pkgName}: ${args.allow.join(", ") || "nothing"} ` +
-        `— no ${roles.join("/")} host declared`);
+if (args.interceptor) {
+  // Printing per-worker network reach here would be actively misleading: --interceptor overrides
+  // every worker's globalOutbound, so none of it applies.
+  console.log(`\noutbound reach: NONE — every worker's fetch() goes to the ${INTERCEPTOR_SERVICE}`);
+  console.log("  service, which records the request and answers 403. Test scaffolding: this");
+  console.log("  deployment cannot reach anything.");
+} else {
+  console.log(`\noutbound reach (--allow ${args.allow.join(",") || "none"}):`);
+  for (const [pkgName, roles] of INTERNAL_REACH) {
+    if (!included.some((p) => p.name === pkgName)) continue;
+    const addresses = roles.flatMap((role) => internalHosts.addresses.get(role) ?? []);
+    console.log(addresses.length > 0
+        ? `  ${pkgName}: ${[...args.allow, ...addresses].join(", ")} (${roles.join(", ")})`
+        : `  ${pkgName}: ${args.allow.join(", ") || "nothing"} ` +
+          `— no ${roles.join("/")} host declared`);
+  }
+  console.log("  all other workers: public only");
 }
-console.log("  all other workers: public only");
 
 // ---------------------------------------------------------------------------
 // 4. Spawn workerd, unless --build-only, supervised by a watchdog unless --no-watchdog.

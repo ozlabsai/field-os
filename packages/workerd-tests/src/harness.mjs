@@ -31,8 +31,11 @@ const WORKERD = fileURLToPath(import.meta.resolve("workerd/bin/workerd"));
  *   `fixtureDir`. Defaults to `"fixture.capnp"`.
  * @param {string[]} [options.extraArgs] - Additional workerd CLI args, e.g. `["--experimental"]`
  *   for configs that use worker loaders.
- * @returns {Promise<{base: string, proc: import("node:child_process").ChildProcess, stop: () => void}>}
+ * @returns {Promise<{base: string, ports: Record<string, number>,
+ *                    proc: import("node:child_process").ChildProcess, stop: () => void}>}
  *   `base` is the `http://127.0.0.1:<port>` origin the fixture's socket is listening on.
+ *   `ports` maps socket name to bound port for configs declaring more than one (it fills in as
+ *   each socket reports, so a second socket's entry appears shortly after this resolves).
  *   `stop()` SIGKILLs the process — a wedged workerd does not honor SIGTERM (see
  *   plans/handoff.md's traps), so a graceful signal here would just make cleanup unreliable.
  */
@@ -44,6 +47,13 @@ export async function startWorkerd({ fixtureDir, configFile = "fixture.capnp", e
   );
   proc.stderr?.on("data", (b) => process.env.DEBUG_WORKERD && console.error(String(b)));
 
+  // Every socket in the config reports its own `listen` event, keyed by socket name. Most fixtures
+  // declare one and only care about its port; a config with a second socket (e.g. --interceptor's
+  // readback socket) gets them all through `ports`. Resolving on the FIRST event is what makes
+  // this work without knowing how many are coming -- a config's first socket is the one callers
+  // mean by `base`, and later events keep arriving into the same map afterwards.
+  /** @type {Record<string, number>} */
+  const ports = {};
   const port = await new Promise((resolve, reject) => {
     let buffered = "";
     const timer = setTimeout(() => reject(new Error("workerd did not report a port")), 20_000);
@@ -53,9 +63,9 @@ export async function startWorkerd({ fixtureDir, configFile = "fixture.capnp", e
         if (!line.trim()) continue;
         const event = JSON.parse(line);
         if (event.event === "listen" && event.port) {
+          if (event.socket) ports[event.socket] = event.port;
           clearTimeout(timer);
           resolve(event.port);
-          return;
         }
       }
     });
@@ -63,6 +73,7 @@ export async function startWorkerd({ fixtureDir, configFile = "fixture.capnp", e
   });
 
   return {
+    ports,
     base: `http://127.0.0.1:${port}`,
     proc,
     stop() {

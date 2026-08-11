@@ -93,16 +93,34 @@ about 2.5 seconds.
 
 ## The airgap assertion
 
-Point `globalOutbound` at an interceptor worker that records and rejects every request, then assert
-zero escapes. This replaces `integration-tests`' `globalThis.fetch` patch and is **strictly
-stronger**: it lives below the isolate, so gadget code cannot monkey-patch out of it.
+**Built.** `run-workerd.mjs --interceptor` points every worker's `globalOutbound` at
+`fieldos-runtime/src/interceptor.js`, which records each request and answers 403; a second socket
+serves the record back at `/__fieldos_intercepted`, reached from a test via
+`startStack({interceptor: true})` and `readIntercepted()`. Covered by
+`packages/workerd-tests/__tests__/airgap-interceptor.test.js`.
 
-It is not a one-line change, though. `packages/integration-tests/src/network-interceptor.ts` only
-works because miniflare routes a Worker's outbound `fetch()` back through the Node process (see
-that file's own header comment, lines 1-6), so patching `globalThis.fetch` is enough there. Real
-standalone workerd has no such mechanism — there is no Node process in the loop to patch. The
-replacement needs both a new capnp interceptor service and a `run-workerd.mjs` flag to point
-`globalOutbound` at it.
+This replaces `integration-tests`' `globalThis.fetch` patch and is **strictly stronger**: it lives
+below the isolate, so gadget code cannot monkey-patch out of it. `globalOutbound` is a
+`ServiceDesignator`, so it can name a *worker* service and not only a `network` one — that is the
+whole mechanism.
+
+Two things worth knowing, both verified by execution:
+
+* **A dynamically-loaded worker inherits its parent's `globalOutbound`** unless it sets its own. So
+  gadget code routes to the interceptor too. Production sets `globalOutbound: null` on gadget
+  workers (`overseer.ts:2356`), which still wins — the two are complementary. The value of the
+  interceptor underneath is that if that `null` were ever dropped, gadget traffic would land in the
+  record instead of on the wire.
+* **Every worker must be covered, including the generated ones.** The assets worker hardcoded its
+  own `globalOutbound` and escaped the first version of this; `scripts/workerd-only.test.js` now
+  asserts the set of emitted values is exactly `["test-interceptor"]`.
+
+It was not the one-line change this document once claimed.
+`packages/integration-tests/src/network-interceptor.ts` only works because miniflare routes a
+Worker's outbound `fetch()` back through the Node process (see that file's own header comment,
+lines 1-6), so patching `globalThis.fetch` is enough there. Real standalone workerd has no such
+mechanism — there is no Node process in the loop to patch. It took both a new capnp interceptor
+service and a `run-workerd.mjs` flag to point `globalOutbound` at it.
 
 Tier 2 needs it, or a CI runner's real egress lets an escape pass silently.
 
