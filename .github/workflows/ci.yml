@@ -13,8 +13,63 @@ env:
   NODE_VERSION: "22.14.0"
 
 jobs:
+  # Does this change touch anything the build or the tests could possibly care about?
+  #
+  # Deliberately NOT `paths-ignore:` on the jobs below. That skips the job entirely, so a required
+  # status check is never reported and sits pending forever -- `main` is unprotected today, but the
+  # day someone protects it, every docs PR would become unmergeable for a non-obvious reason. A
+  # cheap job that runs and reports success keeps the check green either way.
+  #
+  # The filter is inverted on purpose: it lists what is IGNORABLE, so anything unrecognised (a new
+  # config file, a new package) counts as code and runs the full suite. Skipping is the exception
+  # that has to be argued for, which is the right way round for a gate.
+  changes:
+    name: Detect docs-only change
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Need the base commit to diff against, so no shallow clone.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Filter paths
+        id: filter
+        env:
+          # For a PR, compare against its merge base; for a push to main, against the previous
+          # commit. `github.event.before` is all-zeroes on a branch's first push, in which case
+          # fall back to running everything rather than guessing.
+          BASE: ${{ github.event_name == 'pull_request'
+                    && github.event.pull_request.base.sha
+                    || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE}" ] || [ "${BASE}" = "0000000000000000000000000000000000000000" ]; then
+            echo "no usable base commit; running the full suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "${BASE}" HEAD)
+          echo "changed files:"
+          echo "${changed}"
+          # Ignorable: markdown anywhere, and the docs/ and plans/ trees. Everything else is code.
+          # Note .github/ is NOT ignorable -- a change to this workflow must exercise itself.
+          code=$(echo "${changed}" | grep -vE '(\.md$|^docs/|^plans/)' || true)
+          if [ -z "${code}" ]; then
+            echo "docs-only change; skipping build and test"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code changed; running the full suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -38,6 +93,8 @@ jobs:
 
   test:
     name: Build and test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -61,3 +118,39 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  # The single check worth requiring on a branch protection rule.
+  #
+  # A skipped job reports "skipped", not "success", so requiring `Lint` and `Build and test`
+  # directly would leave a docs-only PR pending forever. This job always runs and turns the two
+  # possible shapes into one verdict: either they passed, or they were legitimately skipped.
+  # `always()` is what makes it run at all when its dependencies were skipped.
+  ci:
+    name: CI
+    needs: [changes, lint, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify
+        env:
+          CODE: ${{ needs.changes.outputs.code }}
+          LINT: ${{ needs.lint.result }}
+          TEST: ${{ needs.test.result }}
+          CHANGES: ${{ needs.changes.result }}
+        run: |
+          set -euo pipefail
+          echo "changes=${CHANGES} code=${CODE} lint=${LINT} test=${TEST}"
+          # The filter itself failing must never read as "nothing to do".
+          if [ "${CHANGES}" != "success" ]; then
+            echo "::error::the path filter did not succeed; refusing to pass"
+            exit 1
+          fi
+          if [ "${CODE}" = "false" ]; then
+            echo "docs-only change: build and test were skipped deliberately"
+            exit 0
+          fi
+          if [ "${LINT}" != "success" ] || [ "${TEST}" != "success" ]; then
+            echo "::error::lint=${LINT} test=${TEST}"
+            exit 1
+          fi
+          echo "all checks passed"
