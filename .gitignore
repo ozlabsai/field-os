@@ -56,3 +56,8 @@ packages/workerd-tests/__tests__/fixture-do-durability/dodata/
 
 # standalone workerd build output and DO state (scripts/run-workerd.mjs)
 .workerd/
+
+# tier-2 subset stacks built by packages/workerd-tests (see src/stack.mjs — kept inside the repo
+# because the generator's `embed` paths are relative to --out, and macOS's symlinked temp dir
+# breaks them)
+.workerd-tier2/

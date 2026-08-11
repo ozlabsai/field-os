@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Reusable standalone-workerd boot harness plus tier-1 tests for sandbox egress and network allow-listing.",
+  "description": "Reusable standalone-workerd boot harness, tier-1 contract tests, and the tier-2 stack suite.",
   "scripts": {
     "types:check": "tsc --noEmit",
     "test": "vitest run",
@@ -11,9 +11,12 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260722.1",
+    "@gadgets/integration-tests": "workspace:*",
     "@types/node": "^26.1.0",
+    "capnweb": "^0.8.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10",
-    "workerd": "1.20260801.1"
+    "workerd": "1.20260801.1",
+    "yjs": "^13.6.31"
   }
 }

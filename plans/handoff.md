@@ -85,10 +85,6 @@ into it:
 - `MCP_ALLOW_INSECURE` disables the HTTPS check **and** the private-host block together. Separating
   them is the actual work (OZL-240).
 
-**Known bug worth fixing cheaply: OZL-241.** `updateCode()` accepts a malformed Yjs update and
-permanently bricks a workspace. Not airgap-specific; latent only because the frontend is the sole
-caller today.
-
 **The one needing a decision, not code: OZL-222** — what IdP do customers actually run? It has been
 asked repeatedly and gates verification of the OIDC work.
 
