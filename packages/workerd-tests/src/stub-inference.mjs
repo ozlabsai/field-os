@@ -54,6 +54,15 @@ import { createServer } from "node:http";
  *   turns (agent-loop.js, agent.ts:3045), so a queue that ran dry mid-turn would otherwise spin
  *   for up to 30 slow round trips before failing instead of failing on the very next request.
  *   `stop()` closes the server.
+ *
+ *   ONE STUB PER CHAT. Stickiness is correct for a single chat and wrong for two: the first
+ *   chat's terminating `stop` stays at the head of the queue, so a second chat's newly queued
+ *   tool call sits behind it and is never served -- the second chat stops immediately, with no
+ *   tool call and no follow-up request. Verified by execution: three sequential chats sharing one
+ *   stub returned 2, 1, then 2 requests, with the third chat reporting the *second* chat's tool
+ *   output. The symptom mimics a hang but is an off-by-one lag through a shared queue. A suite
+ *   with two chats wants two stubs (and so two stacks -- `inferenceHost` is baked in at build
+ *   time); see ctx-restore.test.js.
  */
 export async function startStubInference() {
   /** @type {StubTurn[]} */
