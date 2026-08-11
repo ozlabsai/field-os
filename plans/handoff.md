@@ -68,6 +68,8 @@ server rejects, so the inference bug was invisible against it. The servers custo
 | OZL-234 | `fieldos-runtime` — KV, R2, asset services |
 | OZL-235 | Password-auth frontend variant |
 | OZL-239 | *(Alpha stage)* workerd watchdog |
+| OZL-242 | **The workerd parity suite and `pnpm gate`** — tiers 1 and 2 on the pinned runtime |
+| OZL-255 | Stub inference server; the agent `executeCode` and `ctx.restore()` cases |
 
 ## What to pick up next
 
@@ -161,15 +163,27 @@ below).
 The gate before any push, per `docs/git-workflow.md`:
 
 ```sh
-pnpm lint     # oxlint + recursive tsc --noEmit; errors must be zero
-pnpm test
+pnpm gate     # = pnpm lint && pnpm test; exits non-zero on failure
 ```
 
-`.github/workflows/ci.yml` runs `pnpm lint`, `pnpm build` and `pnpm test` on every pull request.
-Note it runs **`pnpm build`**, which the local gate above does not — `build` and `types:check` are
-not the same command, so a build-only failure will not show up locally unless you run it. Actions
-had never executed on this repository until 2026-08-10: GitHub disables it by default on forks, and
-this is one, so every PR before that date was gated by a developer's local run alone (OZL-253).
+`pnpm test` now carries the workerd parity suite (`packages/workerd-tests`): tier 1's hand-written
+capnp fixtures and tier 2's real subset stack, both on the **pinned** binary, ~26s cold. That is
+the cherry-pick gate `docs/testing.md` describes — it is built, not aspirational. Run it after
+`git cherry-pick -x <sha>`.
+
+Two things it will not catch, so do not read a green run as more than it is:
+
+- **`pnpm build`**, which CI runs and the gate does not. `build` and `types:check` are different
+  commands, so a build-only failure shows up only in CI unless you run it yourself.
+- **Real inference.** Tier 2 drives a *stub* OpenAI-compatible server, which accepts whatever the
+  backend sends. It proves `executeCode` is reachable, not that a strict server (vLLM, TGI) would
+  accept the request — the exact gap that cost time before (OZL-225).
+
+`.github/workflows/ci.yml` runs `pnpm lint`, `pnpm build` and `pnpm test` on every pull request —
+so the parity suite runs there too, on `ubuntu-latest`, with no extra setup step
+(`@cloudflare/workerd-linux-64` is already in the lockfile). Actions had never executed on this
+repository until 2026-08-10: GitHub disables it by default on forks, and this is one, so every PR
+before that date was gated by a developer's local run alone (OZL-253).
 
 ## Deliberate limitations, stated so they are not rediscovered
 
