@@ -29,6 +29,12 @@ Bundling is **linear in worker count**, which is what makes Tier 2 affordable: `
 caching** (a warm rerun measured the same 24s), so Tier 3 cannot be cheapened and belongs nightly.
 "Full stack or nothing" was a false dichotomy.
 
+Per-worker bundle costs don't add up to the whole-command cost, though: a 3-worker subset via
+`run-workerd.mjs --only ... --build-only` measured **11.8s** end to end, not ~5s — `workshop-backend`
+has a custom build step (capnweb-validate) that a per-worker bundle measurement doesn't capture. A
+2-worker subset (backend + router) is also a valid stack on its own — verified booting, `GET /` ->
+200.
+
 ## The cherry-pick gate
 
 The highest-value output. A human runs:
@@ -38,20 +44,28 @@ git cherry-pick -x <upstream-sha>
 pnpm gate
 ```
 
-`pnpm gate` must pass, all of:
+`pnpm gate` is `pnpm lint && pnpm test`, and that pair must cover all of:
 
 1. `pnpm lint` — exit 0, zero errors (warnings are tolerated; check the exit code, a piped `tail`
    hides it)
-2. `pnpm test` — tier 0
+2. tier 0 — the unit and in-isolate suites
 3. **tier 1** — the parity gate proper
-4. **tier 2** — the end-to-end leg on a 3-worker stack
-5. **`node scripts/run-workerd.mjs --build-only`** — the capnp translatability check
+4. **tier 2** — the end-to-end leg on a subset stack
+5. **`run-workerd.mjs --build-only`** — the capnp translatability check
 
-Item 5 is the cheapest high-yield item and it is currently absent. An upstream commit that adds a
-binding type the translator does not know breaks the airgapped deployment **while every other test
-stays green** — `run-workerd.mjs` throws on unknown module types and silently drops `browser`. It
-costs ~24s, and it is a build rather than a boot, so it is the one Tier-3-priced item worth paying
-per cherry-pick.
+Items 2–5 are all reached by the single `pnpm test`: the root script is
+`node --test scripts/*.test.js && pnpm run --recursive --if-present test`, so it picks up the
+`scripts/` suites (item 5, below) and every package's own `test` script, `packages/workerd-tests`
+(tiers 1 and 2) among them. They are listed separately because they fail for different reasons,
+not because they are separate commands.
+
+Item 5 is the cheapest high-yield item, and it is already gated: `scripts/workerd-outbound.test.js`
+shells out to `run-workerd.mjs --build-only` (its lines 24-31 and 101-107), and that test runs
+inside `pnpm test` via the root `test` script (`node --test scripts/*.test.js`). It matters because
+an upstream commit that adds a binding type the translator does not know breaks the airgapped
+deployment **while every other test stays green** — `run-workerd.mjs` throws on unknown module
+types and silently drops `browser`. It costs ~24s, and it is a build rather than a boot, so it is
+the one Tier-3-priced item worth paying per cherry-pick.
 
 **Item 6 is not automatable.** Does the diff touch `LOADER`, `ctx.restore`, `ctx.facets`,
 `ctx.exports`, `compatibility_flags`, `kv_namespaces`/`r2_buckets`, or
@@ -81,9 +95,14 @@ about 2.5 seconds.
 
 Point `globalOutbound` at an interceptor worker that records and rejects every request, then assert
 zero escapes. This replaces `integration-tests`' `globalThis.fetch` patch and is **strictly
-stronger**: it lives below the isolate, so gadget code cannot monkey-patch out of it. Verified
-working. `run-workerd.mjs` emits `globalOutbound = "internet"` on every worker against one named
-service, so this is a one-line generator change.
+stronger**: it lives below the isolate, so gadget code cannot monkey-patch out of it.
+
+It is not a one-line change, though. `packages/integration-tests/src/network-interceptor.ts` only
+works because miniflare routes a Worker's outbound `fetch()` back through the Node process (see
+that file's own header comment, lines 1-6), so patching `globalThis.fetch` is enough there. Real
+standalone workerd has no such mechanism — there is no Node process in the loop to patch. The
+replacement needs both a new capnp interceptor service and a `run-workerd.mjs` flag to point
+`globalOutbound` at it.
 
 Tier 2 needs it, or a CI runner's real egress lets an escape pass silently.
 

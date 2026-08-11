@@ -15,7 +15,8 @@
     "lint:fix": "oxlint --fix",
     "types:check": "pnpm run --recursive --if-present types:check",
     "lint": "pnpm run lint:check && pnpm run types:check",
-    "types:generate": "node scripts/generate-worker-types.mjs"
+    "types:generate": "node scripts/generate-worker-types.mjs",
+    "gate": "pnpm run lint && pnpm run test"
   },
   "devDependencies": {
     "aws4fetch": "^1.0.20",

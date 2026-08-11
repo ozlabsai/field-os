@@ -5,7 +5,7 @@
 // (unless --build-only) spawns `workerd serve` on it.
 //
 // Usage: node scripts/run-workerd.mjs [--out .workerd] [--port 8080] [--allow public,private]
-//                                      [--build-only] [--no-watchdog]
+//                                      [--build-only] [--no-watchdog] [--only <pkg,...>]
 //                                      [--watchdog-interval 5000] [--watchdog-failures 3]
 
 import { execFileSync, spawn } from "node:child_process";
@@ -26,10 +26,14 @@ const FRONTEND_DIST = join(PACKAGES_DIR, "workshop-frontend", "dist");
 // gatekeepers that are actually maintained (the other ten in packages/ are delete-candidate
 // connectors, per the task brief — skip them here rather than reading them out of some registry
 // that doesn't exist yet).
-const INCLUDED_GATEKEEPERS = new Set([
+const ALL_GATEKEEPERS = [
   "gatekeeper-mcp", "gatekeeper-mcp-portal", "gatekeeper-context", "gatekeeper-scheduler",
   "gatekeeper-homeassistant", "gatekeeper-oidc", "gatekeeper-github",
-]);
+];
+
+// The two workers every deployment shape needs: the router is the socket's target, and the
+// backend is what it forwards /api to. Neither is ever subsettable by --only.
+const CORE_PACKAGES = ["workshop-backend", "router"];
 
 // workerd's `network` allow list accepts these alongside CIDR blocks (workerd.capnp:826-832).
 const ALLOW_KEYWORDS = new Set(["public", "private", "local", "network", "unix", "unix-abstract"]);
@@ -79,7 +83,7 @@ function validateAllow(allow, source = "--allow") {
 function parseArgs(argv) {
   const args = {
     out: join(ROOT, ".workerd"), port: 8080, allow: ["public", "private"], buildOnly: false,
-    watchdog: true, watchdogInterval: 5000, watchdogFailures: 3,
+    watchdog: true, watchdogInterval: 5000, watchdogFailures: 3, only: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     // Accept both `--flag value` and `--flag=value`.
@@ -97,6 +101,8 @@ function parseArgs(argv) {
     else if (a === "--allow") {
       const raw = nextValue();
       args.allow = raw === "none" ? [] : raw.split(",").map((s) => s.trim()).filter(Boolean);
+    } else if (a === "--only") {
+      args.only = nextValue().split(",").map((s) => s.trim()).filter(Boolean);
     } else if (a === "--build-only") args.buildOnly = true;
     else if (a === "--no-watchdog") args.watchdog = false;
     else if (a === "--watchdog-interval") args.watchdogInterval = Number.parseInt(nextValue(), 10);
@@ -108,6 +114,29 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 validateAllow(args.allow);
+
+// The gatekeepers this run includes. `--only` narrows the set for a cheap subset stack (tier-2
+// tests boot 3 workers rather than 9; bundling is linear in worker count). This one Set is the
+// single source for both the bundle filter and the backend/router service-binding loops below, so
+// a subset stays self-consistent -- nothing emits a binding to a service that was not generated.
+//
+// An unknown name is fatal rather than ignored: a typo that silently produced a smaller stack
+// would leave a test passing against a deployment missing the very worker it meant to exercise.
+const INCLUDED_GATEKEEPERS = new Set(ALL_GATEKEEPERS);
+if (args.only) {
+  const unknown = args.only.filter(
+      (name) => !ALL_GATEKEEPERS.includes(name) && !CORE_PACKAGES.includes(name));
+  if (unknown.length > 0) {
+    throw new Error(
+        `--only: unknown package(s) ${unknown.map((n) => JSON.stringify(n)).join(", ")}.\n` +
+        `  Known gatekeepers: ${ALL_GATEKEEPERS.join(", ")}\n` +
+        `  (${CORE_PACKAGES.join(" and ")} are always included and need not be listed.)`);
+  }
+  INCLUDED_GATEKEEPERS.clear();
+  for (const name of args.only) {
+    if (!CORE_PACKAGES.includes(name)) INCLUDED_GATEKEEPERS.add(name);
+  }
+}
 
 // The internal services this deployment depends on, resolved to addresses now because workerd
 // filters on the resolved address and never sees the hostname. Pinning at config generation is
@@ -136,7 +165,7 @@ const publicBaseUrl = `http://localhost:${args.port}`;
 
 const ALL_DEPLOYABLE = findDeployablePackages(PACKAGES_DIR);
 const included = ALL_DEPLOYABLE.filter(
-    (p) => p.name === "workshop-backend" || p.name === "router" || INCLUDED_GATEKEEPERS.has(p.name));
+    (p) => CORE_PACKAGES.includes(p.name) || INCLUDED_GATEKEEPERS.has(p.name));
 
 const bundlesDir = join(args.out, "bundles");
 mkdirSync(bundlesDir, { recursive: true });

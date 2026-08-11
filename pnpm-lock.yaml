@@ -521,9 +521,15 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^5.20260722.1
         version: 5.20260804.1
+      '@gadgets/integration-tests':
+        specifier: workspace:*
+        version: link:../integration-tests
       '@types/node':
         specifier: 26.1.0
         version: 26.1.0
+      capnweb:
+        specifier: ^0.8.0
+        version: 0.8.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -533,6 +539,9 @@ importers:
       workerd:
         specifier: 1.20260801.1
         version: 1.20260801.1
+      yjs:
+        specifier: ^13.6.31
+        version: 13.6.31
 
   packages/workshop-backend:
     dependencies:
