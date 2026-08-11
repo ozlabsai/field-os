@@ -1,8 +1,13 @@
-// Upstream suppresses these two imports with `@ts-expect-error` because its src/ tsconfig carries
-// only browser types. Ours resolves node builtins fine, so the suppressions are *unused* here and
-// TS2578 makes that a hard error — the directives are dropped rather than the imports changed.
-// Re-add them if a future upstream port reintroduces them; this is a fork divergence, not a bug in
-// either tree.
+// Vitest runs this under node, so it reads files the browser bundle never would. Upstream
+// suppresses these two imports with `@ts-expect-error` because its copy of this package declares
+// no `@types/node`; we declare it instead (see package.json), so the imports typecheck honestly
+// and the suppressions would themselves be errors here (TS2578, unused directive).
+//
+// That asymmetry is a trap worth naming: dropping the directives WITHOUT declaring the dependency
+// passes locally and fails CI with the opposite error (TS2307, cannot find module), because
+// whether `@types/node` is visible depends on pnpm hoisting from sibling packages — which differs
+// between a developer's incrementally-updated store and CI's `--frozen-lockfile` install. Both
+// failure modes were observed. The declared devDependency is what makes this deterministic.
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { describe, expect, it, vi } from 'vitest'
