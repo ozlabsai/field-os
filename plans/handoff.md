@@ -70,13 +70,27 @@ server rejects, so the inference bug was invisible against it. The servers custo
 | OZL-239 | *(Alpha stage)* workerd watchdog |
 | OZL-242 | **The workerd parity suite and `pnpm gate`** — tiers 1 and 2 on the pinned runtime |
 | OZL-255 | Stub inference server; the agent `executeCode` and `ctx.restore()` cases |
+| OZL-225 | Inference verified against a real strict OpenAI-compatible server (tool calls included) |
+| OZL-243 | **Upstream sync established** — the weekly watcher, and `b2a51b5` ported through the gate |
+| OZL-254 | Answered: dynamic workers, DOs and facets are workerd-native; only `browser` needs a substitute |
 
 ## What to pick up next
 
-**Cheapest first: OZL-224–227.** Four verification issues — doc/sheet/deck, local models, admin
-dashboard, sharing — all blocked until today because they need a running stack. Now unblocked, and
-each is verification rather than construction. Note OZL-226 has one real gap inside it: session
-bounds have no admin UI.
+**Fix the gate before leaning on it further: OZL-256.** `pnpm test` fails intermittently under
+concurrency, in two distinct ways — a build failure (`.wrangler/validate/src/server.ts not found`)
+and workerd failing to boot. Both clear on a serial re-run. Reproduced on `main`; the four tier-2
+files that each boot their own stack made the contention materially worse. This matters more than a
+normal flake because `pnpm test` **is** the cherry-pick gate, and OZL-243 just made that the thing
+every upstream port depends on. A gate that fails at random teaches people to re-run until green.
+
+**Then the two triaged upstream commits.** `docs/upstream-ports.md` lists `2508099` (dev-server
+ports, low risk) and `8b08672` (WebSocket abort on overseer DO death). The second is the direct
+follow-up to the commit just ported and touches the DO lifecycle, so unlike `b2a51b5` it genuinely
+needs the full gate — which is an argument for doing OZL-256 first.
+
+**Cheapest first: OZL-224, 226, 227.** Three verification issues — doc/sheet/deck, admin dashboard,
+sharing — each verification rather than construction. Note OZL-226 has one real gap inside it:
+session bounds have no admin UI.
 
 **Highest leverage: OZL-219 (SSRF inversion + `gatekeeper-shared`).** It unblocks OZL-240 (on-prem
 MCP servers are unreachable as shipped) and OZL-230 (MCP to databases). Two findings feed straight
@@ -104,7 +118,20 @@ Each of these looked like success while being wrong. That is what makes them wor
   the `SYSTEM_PROMPT` template literal as examples for the model. Only `server.ts`'s `export { ... }`
   list is authoritative.
 - **Running the release build breaks the next `types:check`.** It regenerates each package's
-  gitignored `.wrangler/validate/`; clear with `rm -rf packages/*/.wrangler`.
+  gitignored `.wrangler/validate/`; clear with `rm -rf packages/*/.wrangler`. `pnpm gate` trips
+  this on itself, so a `types:check` failure in `gatekeeper-oidc` right after a gate run is almost
+  always this and not your change.
+- **Local and CI resolve types differently, and a fix for one can break the other.** During the
+  `b2a51b5` port, two `@ts-expect-error` directives were *unused* locally (TS2578, a hard error) and
+  *required* on CI (TS2307, cannot find module) — because `@types/node` was visible only through
+  pnpm hoisting, which differs between a developer's incrementally-updated store and CI's
+  `--frozen-lockfile` install. Deleting them passed locally and failed CI; keeping them did the
+  reverse. The fix is to declare the dependency rather than rely on either accident. Assume the two
+  environments disagree.
+- **`gh run rerun --failed` leaves an aggregating job stale.** It re-runs only failed jobs, so a
+  `needs:`-gated summary job (our `CI` check) is never re-run: its conclusion stays empty, the check
+  reads `QUEUED` forever, and the run's overall conclusion still says `success`. Re-run the whole
+  workflow instead.
 - **`uniqueKey` values are permanent.** They become the on-disk directory name and there is no
   migration mechanism. `run-workerd.mjs` persists them in `.workerd/keys.json` — do not regenerate.
 - **`SIGTERM` is ignored by a wedged workerd.** Go straight to `SIGKILL`.
@@ -187,6 +214,11 @@ before that date was gated by a developer's local run alone (OZL-253).
 
 ## Deliberate limitations, stated so they are not rediscovered
 
+- **`pnpm test` is intermittently flaky under concurrency (OZL-256).** Two symptoms, same shape: a
+  build failure naming `.wrangler/validate/src/server.ts`, or `workerd exited early with code 1`.
+  Both clear on a serial re-run, and both are contention over the shared per-package build output.
+  Re-run before believing a failure — but do not normalise it: this is the cherry-pick gate, and a
+  gate that fails at random is the thing that teaches people to re-run until green.
 - A runaway gadget interrupts the deployment until the watchdog restarts it (OZL-239).
 - On-prem MCP servers cannot be connected without disabling an orthogonal control (OZL-240).
 - Blueprints are fetchable unauthenticated by id, bypassing org separation (OZL-223).
