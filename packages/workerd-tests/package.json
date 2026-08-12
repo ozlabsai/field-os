@@ -12,6 +12,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260722.1",
     "@gadgets/integration-tests": "workspace:*",
+    "@gadgets/workshop-shared": "workspace:*",
     "@types/node": "^26.1.0",
     "capnweb": "^0.8.0",
     "typescript": "^5.9.3",

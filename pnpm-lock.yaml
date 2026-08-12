@@ -524,6 +524,9 @@ importers:
       '@gadgets/integration-tests':
         specifier: workspace:*
         version: link:../integration-tests
+      '@gadgets/workshop-shared':
+        specifier: workspace:*
+        version: link:../workshop-shared
       '@types/node':
         specifier: 26.1.0
         version: 26.1.0

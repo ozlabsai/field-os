@@ -13,7 +13,7 @@ Update that mark on every pass. It cannot be derived: cherry-picking does not cr
 |---|---|---|---|
 | `b2a51b5` | 2026-08-09 | **PORTED** | RPC error classification. Rule 3 (auth) + rule 4 (touches `user.ts`, `server.ts`, `api.ts`). Also fixed a defect of ours — see below. |
 | `2508099` | 2026-08-10 | **TO PORT** | "Fix custom ports for local development". Rule 4 (touches `scripts/dev-server-config.js`, which we modified). Dev-ergonomics only, no runtime surface — low risk, low urgency. |
-| `8b08672` | 2026-08-10 | **TO PORT** | "Fix code that aborts the WebSocket when an overseer DO dies". Rule 4 (`server.ts`). The direct follow-up to `b2a51b5` — it builds on the same reconnect path, so porting it *after* this one is the cheap ordering. Touches the DO lifecycle, so unlike `b2a51b5` it genuinely needs the full gate. |
+| `8b08672` | 2026-08-10 | **PORTED** | "Fix code that aborts the WebSocket when an overseer DO dies". Rule 4 (`server.ts`). Fixed a mechanism that was a no-op in our tree too — see below. |
 
 ## Ported: `b2a51b5` — the first exercise of this process
 
@@ -63,3 +63,50 @@ new `rpcErrors` and `accountsSubscriber` suites now run here.
 
 This is the first port gated on standalone workerd rather than lint+test alone, which was the
 caveat OZL-243 carried until OZL-242 landed.
+
+
+## Ported: `8b08672` — a mechanism that was a no-op here too
+
+Zero conflicts; `server.ts` auto-merged. The interesting part was confirming it applies to us at all.
+
+**Upstream's diagnosis holds in our tree, and we verified it rather than trusting it.**
+`newWorkersRpcResponse` builds a `WebSocketPair`, accepts `pair[0]` as the *server* end running the
+session, and returns `pair[1]` on the 101 response — read directly from `capnweb@0.8.0`
+(`dist/index.js:2596`), the version we pin. Our `abortSession` called `resp?.webSocket?.close()`,
+i.e. the end handed **to the client**. It closed nothing.
+
+That made the abort a silent no-op at all three of our call sites, degrading differently at each:
+
+| call site | what still worked | what did not |
+|---|---|---|
+| `withSessionChecks` (OZL-212 expiry) | the throw still fails every call, so a dead credential does nothing | the socket the comment says must be killed stayed open |
+| `revokeAllSessions` | next call fails anyway, as its comment anticipates | client saw a failed request instead of a clean disconnect |
+| **workspace DO death** (`server.ts:307`) | — | **nothing else fails the calls**; the client kept a session whose DO was gone |
+
+The third has no fallback, which is what makes this more than hygiene.
+
+**Version check, because the port clones library internals.** Upstream's clone of
+`newWorkersRpcResponse` forwards an `options` argument that capnweb 0.8.0's *own*
+`newWorkersRpcResponse` does not accept. Cloning sidesteps that — but only if the functions the
+clone calls do accept it. Confirmed in `index-workers-CiDKhXAE.d.ts:296/315/327` that
+`RpcSessionOptions`, `newHttpBatchRpcResponse` and `newWebSocketRpcSession` all take `options` at
+0.8.0. Worth re-checking on a capnweb bump: this is cloned code, so it will not fail to compile if
+the library moves underneath it.
+
+**A test that fails without the patch** (`workerd-tests/__tests__/session-abort.test.js`). It
+drives a raw WebSocket rather than `rpc-client`'s `connect()`, because the property under test is
+the socket's own lifecycle. RED-CHECKED: restoring the pre-port `resp?.webSocket?.close()` makes it
+time out and fail (16s), while the ported code passes in ~4s. An assertion that
+`revokeAllSessions()` merely resolves would have passed in both worlds — the RPC always succeeded;
+only the socket never closed.
+
+The UI halves of the commit (the spurious "Failed to load connections" toast, and replacing the
+reconnect banner with a chip) came along cleanly and were taken as-is.
+
+**Cost:** `pnpm gate` exit 0, `pnpm build` exit 0, `workerd-tests` 18/18 across 10 files. 150s on an
+idle machine, against a ~155s pre-port baseline — the fifth tier-2 stack build is absorbed by file
+parallelism (18.08s wall for 55.88s of test time), so no consolidation was needed.
+
+One dependency was added: `workerd-tests` now declares `@gadgets/workshop-shared`, which it had
+been reaching through pnpm hoisting. Declared rather than left implicit, per the `b2a51b5` lesson
+that local and CI resolve differently.
