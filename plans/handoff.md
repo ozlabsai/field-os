@@ -87,10 +87,21 @@ than by serializing the callers — the contended resource is one directory, so 
 every caller including ones not yet written, and keeps the concurrency. Verified: 6/6 clean-state
 `pnpm gate` runs green, ~155s (no regression). The guard test fails 4/4 with the lock removed.
 
-**Then the two triaged upstream commits.** `docs/upstream-ports.md` lists `2508099` (dev-server
-ports, low risk) and `8b08672` (WebSocket abort on overseer DO death). The second is the direct
-follow-up to the commit just ported and touches the DO lifecycle, so unlike `b2a51b5` it genuinely
-needs the full gate — which OZL-256 has now made trustworthy.
+**~~`8b08672`~~ — ported (PR #35).** The WebSocket abort on overseer DO death. Upstream's "closed
+the wrong end" diagnosis was verified against our pinned capnweb 0.8.0 and holds here: our
+`abortSession` was a no-op at all three call sites, and workspace-DO death (`server.ts:307`) has no
+other failure path. Carries a RED-checked test. `docs/upstream-ports.md` has the detail.
+
+**Still to port: `2508099`** (dev-server ports, low risk, dev-ergonomics only).
+
+**Note the gate found a bug in its own fix.** Running `pnpm gate` on merged `main` — a combination
+neither PR's CI covered — surfaced an `ENOTEMPTY` crash in the new build lock: `rmSync(recursive,
+force)` walks a tree then `rmdir`s it, so an acquisition renaming staging onto that path mid-walk
+makes the `rmdir` throw (`force` only swallows `ENOENT`; reproduced standalone at 107/400). Fixed
+in PR #36 by making removal atomic the same way acquisition is. Worth repeating the lesson: the
+mutual-exclusion test stayed green throughout, because "two builders never overlap" and "releasing
+does not crash" are different properties. **Run the gate on the merge commit, not just on the
+branch.**
 
 **Cheapest first: OZL-224, 226, 227.** Three verification issues — doc/sheet/deck, admin dashboard,
 sharing — each verification rather than construction. Note OZL-226 has one real gap inside it:
