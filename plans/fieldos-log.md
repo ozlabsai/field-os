@@ -901,3 +901,99 @@ sources nobody authored.
 `exclude` in tsconfig cannot fix it — the file is reached by import, not by the `include` glob
 (tried, and reverted). Likely a one-line regeneration; not attempted here because it is outside
 OZL-256 and deserves its own verification. Until then, clear `.wrangler` between gate runs.
+
+## 2026-08-12 — OZL-219 reconnaissance: the ticket is mostly already built
+
+No code. The output of this phase is four verified *don't*s, which is worth more than the code
+would have been — building the package the ticket is named after, and disabling the flag it says
+to disable, would have been days of work leaving the system no safer, and in one case measurably
+less safe.
+
+Three investigations ran independently (a reasoning pass, an adversarial pass, and a mechanical
+inventory) plus one execution probe. They converged. My own analysis was corrected three times in
+the process; each correction is recorded below, because the wrong version was plausible.
+
+### OZL-219's five required controls, actual status
+
+| # | control | status |
+|---|---|---|
+| 1 | central internal-CIDR allowlist | **BUILT** — `INTERNAL_REACH`, per-worker-per-role, `run-workerd.mjs:282-310` |
+| 2 | don't reuse `MCP_ALLOW_INSECURE` | **BUILT** — PR #15, split into `MCP_ALLOW_HTTP` / `MCP_ALLOW_PRIVATE_HOSTS` |
+| 3 | redirect-hop revalidation + explicit test | **BUILT** — `fetch.ts:171` + `fetch.test.ts:39-47`, with ~7 sibling cases |
+| 4 | private-CA TLS | not built; feasible, but see the ExternalServer finding |
+| 5 | validation on HomeAssistant | not built — deliberately dropped, we do not ship HomeAssistant |
+
+### Four things not to do
+
+**Do not create `packages/gatekeeper-shared`.** Real cross-connector duplication is **~95-115
+lines**, not the ticket's 1,500-2,500. The estimate counted whole `UserAccount` DO classes
+(332+121+122 lines) that are *not* extractable: github stores an OAuth token, homeassistant a
+validated baseUrl+token, oidc a verified ID token — three account models sharing only a
+nonce-handshake shape. And `backend-utils` **already is** the cross-cutting shared package (8 of 9
+packages depend on it, versus `mcp-shared`'s 2), so the extraction target exists.
+
+**Do not disable `global_fetch_strictly_public`.** It is near-inert off-platform:
+`workshop-backend/wrangler.jsonc:16-18` states that under standalone workerd, blocking private IPs
+is already the default, and `fieldos-log.md:495-497` confirmed by execution that the flag "only
+bites on Cloudflare's platform." Removing it accomplishes nothing here and weakens the
+on-platform case for free. The ticket's entire premise — disable the flag, then compensate —
+is off-platform moot.
+
+**Do not migrate the CIDR allowlist to `ExternalServer` bindings.** This one reversed on execution.
+It looked like a strict tightening (per-host rather than per-CIDR, plus private-CA TLS and
+`certificateHost` pinning, and it sits below the isolate). It is in fact a **separate, unfiltered
+egress path**. Verified, reproduced independently, in one process and config:
+
+| probe | result |
+|---|---|
+| `env.EXT.fetch()` -> loopback, `globalOutbound = network(allow=["public"])` | **succeeds**, stderr empty — no policy check ran |
+| bare `fetch()` -> *the same address, same worker, same config* | refused: `connect() blocked by restrictPeers()` |
+| `env.EXT.fetch()` -> dead port (negative control) | `Network connection lost.`, **no** restrictPeers line |
+
+The second row proves the allow-list was active; the third proves the first was not a vacuous
+pass. Re-reading `workerd.capnp:806-808` in that light, "it's recommended that you create
+ExternalServer bindings instead" means the binding is the sanctioned way to **punch through** the
+default block — a capability, not a finer-grained filter. Two consequences: an ExternalServer
+address derived from **user input** would fully defeat the allow-list (ruling it out for precisely
+the user-pasted-URL cases that motivated the ticket), and any claim that "the network allow-list is
+the SSRF boundary" must now add "**and** no ExternalServer binding points at an untrusted address."
+Two invariants, not one. `tlsOptions.trustedCertificates` does parse and boot — but it arrives
+attached to that unfiltered path.
+
+**Do not call `isBlockedHost` / `MCP_ALLOW_PRIVATE_HOSTS` a security control.** `endpoint.ts:11-16`
+says outright it is not the boundary — a Worker cannot resolve DNS, so it cannot see through a
+hostname that rebinds. Grade any future PR here on `network allow` entries and role assignments,
+not on TypeScript diffs.
+
+### The gaps that are real, and were not in the ticket
+
+- **`gatekeeper-oidc` has no guard of any kind.** grep over its `src/` *and* `wrangler.jsonc`
+  returns nothing for `isBlockedHost` / `guardedFetch` / `global_fetch_strictly_public`. It is a
+  worker that `INTERNAL_REACH` deliberately grants RFC1918 reach, fetching a discovery document
+  whose onward links the far side controls (`identity.ts:102`, `oauth.ts:124`).
+- **`webFetch` performs no hostname check by design** (`web-fetch.ts:52-56`, and the reasoning is
+  sound — a blocklist cannot see through DNS). It leans entirely on post-resolution enforcement.
+  Highest exposure of any path, because the *model* chooses the URL and can be steered by prompt
+  injection from fetched content. `__tests__/web-fetch.test.ts` has zero redirect/host assertions.
+- **`constantTimeEqual` is forked three ways** — one security primitive, three implementations:
+  `mcp-shared/connect-nonce.ts:36-40` (portable XOR loop), `github.ts:355-361` +
+  `homeassistant.ts:99-105` (`crypto.subtle.timingSafeEqual`, **no fallback**), and
+  `oidc/oauth.ts:44-56` (timingSafeEqual *with* fallback). The line count is trivial; the forking
+  of a security primitive is not.
+
+### The co-requisite argument, recorded because it will come up again
+
+Widening network reach while `tools.ts:50`'s gate remains `tool.annotations?.readOnlyHint === true`
+— i.e. the far side self-labels — makes the two gaps compound: broader reach *and* an easy way to
+make a write look like a read. That argument binds only to work that actually widens reach. None
+of the remaining items do.
+
+### Corrections to my own analysis, for the record
+
+1. I claimed the CIDR allowlist was unbuilt and ExternalServer was "the real work." It was built.
+2. I claimed the redirect mechanism existed but its test was missing. Both existed.
+3. I proposed ExternalServer as a tightening. Execution showed it is a hole.
+
+Each was plausible, and each would have produced confident, wrong work. The probe's negative
+control is what makes finding 3 trustworthy — without it, "the binding succeeded" could equally
+have meant the fixture never connected.

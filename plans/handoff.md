@@ -107,14 +107,25 @@ branch.**
 sharing — each verification rather than construction. Note OZL-226 has one real gap inside it:
 session bounds have no admin UI.
 
-**Highest leverage: OZL-219 (SSRF inversion + `gatekeeper-shared`).** It unblocks OZL-240 (on-prem
-MCP servers are unreachable as shipped) and OZL-230 (MCP to databases). Two findings feed straight
-into it:
-- `allow = ["public", "private"]` in the capnp `network` service re-opens all of RFC1918. workerd's
-  own schema recommends `ExternalServer` bindings per host instead. The internal-CIDR allowlist the
-  plan wants belongs *in capnp*, not only in connector code.
-- `MCP_ALLOW_INSECURE` disables the HTTPS check **and** the private-host block together. Separating
-  them is the actual work (OZL-240).
+**OZL-219 is mostly already built — read the 2026-08-12 log entry before touching it.** Three of
+its five required controls exist (the per-worker/per-role CIDR allowlist, the `MCP_ALLOW_INSECURE`
+split, and redirect-hop revalidation *with* its test). Four things in the ticket should NOT be
+done, each verified: do not create `gatekeeper-shared` (real duplication is ~95-115 lines, not
+1,500-2,500, and `backend-utils` already is the shared package); do not disable
+`global_fetch_strictly_public` (near-inert off-platform); do not migrate to `ExternalServer`
+bindings; and do not describe `isBlockedHost` as a security control.
+
+**Correction to the advice this file previously gave.** It said workerd's schema "recommends
+`ExternalServer` bindings per host instead", implying a tightening. Verified by execution: an
+`ExternalServer` binding is a separate, *unfiltered* egress path that bypasses the
+`restrictPeers()` check governing bare `fetch()` — a capability, not a finer-grained filter. An
+address derived from user input would fully defeat the allow-list. The probe is rerunnable; see
+the log entry.
+
+**What is actually left there** (none of it widens network reach): `gatekeeper-oidc` has no guard
+of any kind on a worker granted RFC1918 reach; `webFetch` has no host check by design and no
+redirect tests; and `constantTimeEqual` is forked into three implementations, two of which use
+`crypto.subtle.timingSafeEqual` with no fallback.
 
 **The one needing a decision, not code: OZL-222** — what IdP do customers actually run? It has been
 asked repeatedly and gates verification of the OIDC work.
