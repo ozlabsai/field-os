@@ -258,7 +258,15 @@ before that date was gated by a developer's local run alone (OZL-253).
   wrote. `exclude` in tsconfig cannot fix it (the file is reached by import, not by the `include`
   glob — tried and reverted); regenerating that one file on a clean tree probably can. Clear
   `.wrangler` between gate runs until someone does.
-- A runaway gadget interrupts the deployment until the watchdog restarts it (OZL-239).
+- A runaway gadget interrupts the deployment until the watchdog restarts it (OZL-239). The
+  post-Alpha fix (gadget execution in a separate OS process) is **cheaper than OZL-239 estimates** —
+  see the 2026-08-12 log entry. Verified by execution: each facet already has its own sqlite file,
+  and a second workerd process can open it as an ordinary DO, so "migration path for existing gadget
+  state" is a file copy, not a data conversion. `ctx.restore()` is *not* process-local for facets
+  either (only `executeCode`'s `#codeIdMap` hack is). What remains is single-writer discipline
+  across processes (the localDisk backend does **not** lock), minting a durable identity for a
+  gadget that has none, the facet-stub Proxy becoming real RPC, and abort semantics — including the
+  **gatekeeper** facets the ticket omits.
 - On-prem MCP servers cannot be connected without disabling an orthogonal control (OZL-240).
 - Blueprints are fetchable unauthenticated by id, bypassing org separation (OZL-223).
 - Admin revocation targets a *named* user; there is no user directory.
