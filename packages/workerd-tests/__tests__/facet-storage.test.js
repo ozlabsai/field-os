@@ -96,9 +96,21 @@ test("a facet's storage is a separate file from its parent's", async () => {
   // why moving one out means minting a new identity for it.
   expect(facetDb.slice(0, 64)).toBe(parentDb.slice(0, 64));
 
-  // The manifest maps the facet NAME we passed to ctx.facets.get() onto the numeric slot. A
-  // migration has to preserve or rewrite exactly this.
-  expect(readFileSync(join(STORAGE_DIR, UNIQUE_KEY, manifest), "latin1")).toContain("child");
+  // The manifest records the facet NAMES we passed to ctx.facets.get(). Its format, byte-parsed:
+  // an 8-byte header, then one record per facet as [2 bytes 00 00][u16 LE name length][name].
+  //
+  // Note what is NOT in there: the slot number. Slot N is simply the Nth record, in the order
+  // facets were first created -- so a migration tool cannot grep this file for a name and read
+  // off its slot, it has to parse the whole ordered list. UNTESTED and worth knowing before
+  // relying on it: whether ctx.facets.delete() renumbers or reuses slots. If it does, the
+  // positional mapping is not stable across a facet's lifetime.
+  const bytes = readFileSync(join(STORAGE_DIR, UNIQUE_KEY, manifest));
+  expect(bytes.length).toBeGreaterThan(8);
+  // "child" is 5 bytes and the first facet created, so its length prefix sits right after the
+  // header. Asserting the LENGTH, not just the name, is what pins the format rather than merely
+  // observing that the string appears somewhere.
+  expect(bytes.readUInt16LE(10)).toBe("child".length);
+  expect(bytes.subarray(12, 12 + 5).toString("latin1")).toBe("child");
 }, 60_000);
 
 test("a separate process can open a facet's file as an ordinary Durable Object", async () => {
