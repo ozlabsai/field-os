@@ -997,3 +997,111 @@ of the remaining items do.
 Each was plausible, and each would have produced confident, wrong work. The probe's negative
 control is what makes finding 3 trustworthy — without it, "the binding succeeded" could equally
 have meant the fixture never connected.
+
+## 2026-08-12 — OZL-239 post-Alpha: the migration spike, answered
+
+OZL-239's Alpha stage (the watchdog) shipped in `f4c7718`. The post-Alpha stage — moving gadget
+execution into a separate OS process — was gated on a question the ticket said "deserves a spike
+before committing": what happens to existing gadget state when a gadget stops being a facet?
+
+**Answered, by execution. It is not the hard part.** Three of the ticket's five stated cost items
+collapse; the two that remain are not storage problems.
+
+### Each facet already has its own database file
+
+Under the `disk` service, for a parent DO whose id hashes to `<parentHash>`:
+
+| file | holds |
+|---|---|
+| `<parentHash>.sqlite` | the parent's own storage |
+| `<parentHash>.1.sqlite` | facet #1's storage |
+| `<parentHash>.2.sqlite` | facet #2's storage |
+| `<parentHash>.facets` | a ~17-32 byte name→slot manifest |
+
+Read out of the actual files after checkpoint, with distinct values written from parent and facet
+(`parent-value-1` vs `child-value-1`) so the attribution is unambiguous. The manifest is literally
+length-prefixed facet names; `xxd` shows the strings we pass to `ctx.facets.get()`.
+
+### A separate process can open a facet's file as an ordinary DO
+
+The crux. `<parentHash>.1.sqlite` was copied to a fresh directory, renamed to `<parentHash>.sqlite`
+— the filename a *normal*, non-facet namespace expects — and a second, independent workerd process
+with an ordinary `durableObjectNamespaces` binding read `child-value-1` back through plain
+`ctx.storage.get()`. No format conversion, no schema rejection.
+
+**A facet's sqlite file is byte-identical in format to an ordinary DO's.** Only the filename
+directs it. `ctx.facets.clone(src, dst)` also works as a live, storage-duplicating primitive.
+
+### Three caveats that matter more than the format
+
+1. **There is a file path, not an addressing path.** No binding-level API exposes "facet slot N of
+   parent X" — `idFromName`/`idFromString` only produce workerd's own hash. The cross-process read
+   worked because the file was renamed at the filesystem level to impersonate a normal DO. So
+   migration is an *offline* step (stop, copy, rename, start), or `facets.clone()` plus adoption.
+2. **A facet has no `uniqueKey` of its own.** Its identity is parasitic on the parent DO id.
+   Given the standing trap that uniqueKeys are permanent and unmigratable, moving a facet out means
+   *minting a new identity* — the genuinely one-way part of this change.
+3. **The localDisk backend has no cross-process locking.** A live parent's storage was read from a
+   second process while the first was running, with no lock error. This cuts both ways: offline
+   migration is easy, and nothing prevents two processes writing the same file. **Any multi-process
+   design must guarantee single-writer by topology**, because the storage layer will not.
+
+### The other cost items, re-assessed
+
+**Tail delivery is already cross-process-shaped.** The ticket says it "becomes a service binding
+back to the workspace process". But `GadgetTailLoopback.#deliver` (`overseer.ts:7062-7066`) already
+resolves the overseer via `ns.idFromString(this.ctx.props.overseerId)` — a serialized id carried as
+a prop, i.e. the standard cross-DO path. Cross-process it becomes a binding change, not a redesign.
+
+**`ctx.restore()` is not process-local — corrected.** The initial read here was that restore tokens
+cannot cross processes. Wrong, and the pinned binary's own error strings settle it:
+
+> `ctx.restore() cannot be used in this context because the system does not know how to restore
+> this context itself... This may happen if the current worker is a Dynamic Worker or a Durable
+> Object Facet (or both), and the immediate caller did not specify how to restore it.`
+
+`restore()` returns a *replay recipe* — re-invoke `[restore](params)` on the entity resolved fresh,
+which for a DO goes through the durable DO id. Facet restore already survives teardown; the
+`kill -9` test demonstrates it. What is process-local is `#codeIdMap` (`overseer.ts:6301`),
+**our own hack**: put a `codeId` in an in-memory Map, call `restore()`, delete it in a `finally`,
+so a later `restore()` re-resolves onto the gadget's `[restore]()` instead. It exploits
+same-process-same-tick timing. The narrow break is `executeCode`'s dynamic worker, which
+legitimately has no durable identity to restore through.
+
+Consequence: there is **no population of gadgets that cannot go cross-process for restore reasons**,
+so a design of "cross-process except gadgets using restore" solves a non-problem. Do not build it.
+
+### One premise to reject
+
+A plausible recommendation surfaced during this work: move only `executeCode` cross-process and
+leave facets in-process, on the grounds that facets run "reviewed/committed" code rather than
+freshly agent-generated code. **That premise is false.** A gadget facet's modules are read straight
+from the workspace's Yjs document (`overseer.ts:2322-2338`, `mainModule: "server.js"` at `:2353`) —
+the same agent-authored code the user is live-editing. A `while(true){}` in `server.js` wedges the
+process identically.
+
+The *structural* distinction is real and is the better reason: `executeCode` calls
+`env.LOADER.load()` directly (`:5472`, `:6311`) and is not a facet at all, while gadgets (`:2409`)
+and gatekeepers (`:2509`) go through `ctx.facets.get()`. So `executeCode` is the easier seam — but
+taking it first leaves a **named, documented gap**: a runaway in a gadget's own `server.js` still
+wedges the deployment. That must be written down the way the Alpha ceiling was, not implied away.
+
+### Also: the ticket's "Also do" item is obsolete
+
+It asks to delete `delete config.worker_loaders` at `integration-tests/src/harness.ts:102`, calling
+that line "the only reason this path has never been covered". True when written on 2026-08-10;
+false now. OZL-242/255 built tier 2, which runs real gadget code through the real backend on the
+pinned binary — `gadget-sandbox.test.js` (4 cases) and `agent-execute-code.test.js`, with
+`expect(report.alive).toBe("gadget-ran")` as an explicit liveness gate. The integration harness
+drops the loader because gatekeepers there genuinely do not run gadget code. Removing that line
+would force every integration test to boot a loader for no benefit.
+
+### What actually remains, in order
+
+1. **Single-writer discipline across processes** — the storage layer will not enforce it.
+2. **Minting a durable identity** for a gadget that has none of its own today.
+3. **The facet-stub Proxy** (`overseer.ts:2412-2453`) becoming a real RPC protocol.
+4. **Abort semantics across a process boundary** — three gadget sites (`:2154`, `:2402`, `:3203`)
+   plus the **gatekeeper facets the ticket never mentions** (`:2509`, `:2623`).
+
+None of these is a storage-format problem, which is what the spike was gated on.
