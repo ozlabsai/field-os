@@ -139,6 +139,14 @@ Each of these looked like success while being wrong. That is what makes them wor
 - **`uniqueKey` values are permanent.** They become the on-disk directory name and there is no
   migration mechanism. `run-workerd.mjs` persists them in `.workerd/keys.json` — do not regenerate.
 - **`SIGTERM` is ignored by a wedged workerd.** Go straight to `SIGKILL`.
+- **Tier-1 fixtures leak `workerd serve` processes under parallel load**, and nothing reaps them.
+  Found 23 orphans mid-session, the oldest **26 hours** old — so they survive across runs and
+  accumulate. Neither a tier-1 nor a tier-2 file leaks when run alone, so it is a race under
+  concurrency, not a missing `stop()` on one path. They cost real CPU: the same `pnpm gate` that
+  takes ~150s idle took **4670s** on a machine carrying that backlog. Check with
+  `pgrep -f "workerd serve" | wc -l` before trusting any timing measurement, and
+  `pkill -9 -f "workerd serve"` between runs. Untriaged — it makes benchmarks lie, not the suite
+  fail.
 - **Three inherited GitHub workflows could never pass here, and were deleted.** `cla.yml` checked
   signatures against *Cloudflare's* CLA via a `cla-signatures` branch that does not exist on this
   fork; `bonk.yml` and `bonk-pr.yml` needed `CLOUDFLARE_ACCOUNT_ID`/`GATEWAY_ID`/`API_TOKEN`
