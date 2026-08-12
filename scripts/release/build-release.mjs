@@ -24,6 +24,7 @@ import {
 import {
   findDeployablePackages, generateManifest, readDeployInputs, readWranglerConfig,
 } from "./manifest-lib.mjs";
+import { withBuildLock } from "../build-lock.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PACKAGES_DIR = join(ROOT, "packages");
@@ -125,8 +126,13 @@ function main() {
   const workers = [];
   for (const pkg of findDeployablePackages(PACKAGES_DIR)) {
     const outDir = join(bundleDir, pkg.name);
-    run("pnpm", ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outDir],
-        { cwd: pkg.dir });
+    // Locked for the same reason the workerd generator is: wrangler.jsonc's `main` and its custom
+    // build command share one fixed `.wrangler/validate/` per package, which is emptied before it
+    // is rewritten (OZL-256, see build-lock.mjs). This loop is serial, so it never races itself --
+    // the lock is what keeps it from tearing against a concurrent test run or generator.
+    withBuildLock(pkg.dir, () =>
+        run("pnpm", ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outDir],
+            { cwd: pkg.dir }));
     const { mainModule, modules } = collectModules(outDir);
     for (const mod of modules) {
       writeFileSync(join(args.out, "modules", mod.sha256), mod.bytes);

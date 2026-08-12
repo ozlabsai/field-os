@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { collectModules } from "./release/hash-lib.mjs";
 import { findDeployablePackages, readWranglerConfig } from "./release/manifest-lib.mjs";
 import { parseInternalHosts, resolveInternalHosts } from "./internal-hosts.mjs";
+import { withBuildLock } from "./build-lock.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGES_DIR = join(ROOT, "packages");
@@ -198,15 +199,23 @@ function prebuildGeneratedUi(pkg) {
 const workers = []; // { pkgName, config, mainModule, modules, outDir }
 for (const pkg of included) {
   console.log(`\nbundling ${pkg.name}...`);
-  prebuildGeneratedUi(pkg);
 
   const outDir = join(bundlesDir, pkg.name);
   // Custom build commands (capnweb-validate) resolve their bin via `pnpm exec`, which requires
   // cwd to be inside the package so pnpm finds its node_modules/.bin.
-  execFileSync(
-      "pnpm", ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outDir],
-      { stdio: "inherit", cwd: pkg.dir },
-  );
+  //
+  // Locked because `--outdir` relocates the *output* but not the *input*: wrangler.jsonc's `main`
+  // and its build command share one fixed `.wrangler/validate/` per package, and that tree is
+  // emptied before it is rewritten. Two concurrent generators in one package read it torn --
+  // OZL-256, see build-lock.mjs. prebuildGeneratedUi is inside the lock because it writes the
+  // same package's src/generated/.
+  withBuildLock(pkg.dir, () => {
+    prebuildGeneratedUi(pkg);
+    execFileSync(
+        "pnpm", ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outDir],
+        { stdio: "inherit", cwd: pkg.dir },
+    );
+  });
 
   const config = readWranglerConfig(pkg.dir);
   const { mainModule, modules } = collectModules(outDir);

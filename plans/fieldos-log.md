@@ -805,3 +805,99 @@ there. Both designs said so independently.
 **Not done:** cgroups `memory.max` as a backstop for the memory hog. It belongs in the deployment
 unit rather than this script, and it addresses only the memory half — `cpu.max` throttles the whole
 process, making every workspace slow rather than isolating one.
+
+## 2026-08-12 — The gate made deterministic (OZL-256)
+
+`pnpm test` was the cherry-pick gate every upstream port depends on, and it failed at random. Two
+symptoms — a build failure naming `.wrangler/validate/src/server.ts`, and `workerd exited early
+with code 1` — turned out to be one race, observed at two instants.
+
+### The cause, watched rather than reasoned about
+
+Eight packages declare, in `wrangler.jsonc`, a `main` that points *into* the tree their own build
+command rewrites:
+
+```jsonc
+"main":          ".wrangler/validate/src/server.ts",
+"build.command": "... capnweb-validate build --out .wrangler/validate"
+```
+
+Sampling that directory every 150ms through one build settles it:
+
+| | |
+|---|---|
+| `files=0` | ~0.9s — the tree is emptied before it is rewritten |
+| `files=26` | partial |
+| `files=36` | complete |
+
+So a second `wrangler deploy --dry-run` in the same package during that window reads a torn tree.
+The `files=0` instant gives "server.ts not found"; the `files=26` instant gives `Could not resolve
+"./observability"` — the entry point resolves and its siblings do not, which is the variant this
+session captured. A torn read that still emits a bundle surfaces later, at boot.
+
+### Why a lock, and not `--concurrency=1`
+
+The issue listed serializing the callers first. That was written before tier 2 grew, and it treats
+the symptom: it makes collisions unlikely by removing concurrency, while the race survives for the
+next parallel caller to rediscover. The contended resource is *one directory per package*, so
+excluding on that fixes every caller at once — including callers not yet written — and leaves the
+concurrency intact. `scripts/build-lock.mjs`, held across build-and-read in both callers
+(`run-workerd.mjs` and `release/build-release.mjs`).
+
+Relocating the output per invocation was considered and rejected: `--outdir` moves the *output*,
+but there is no `--main` override, so per-invocation inputs would need a synthesized
+`wrangler.jsonc` per call — drift, in exactly the place tier 2 exists to detect it.
+
+### Three tests that passed while proving nothing
+
+Recorded because the repo's own trap list warns about this shape and I still walked into it three
+times. Each version was green, and each was green for a different wrong reason:
+
+1. A shell with background jobs and `wait` returned before the redirected output files were
+   flushed — the test read an empty file and reported `NaN`. Flaky *test*, not a flaky lock.
+2. Each builder read the tree back after its own writes, so a builder that had been wiped mid-way
+   still counted 12 files: a *later* peer had refilled the directory.
+3. All builders wrote identical filenames, which makes a torn read invisible — a peer's rewrite is
+   indistinguishable from your own.
+
+The fix was pid-tagged output files plus spread-out reads. Only then did the unlocked case fail
+4/4, which is what makes the locked case's 10/10 mean anything.
+
+### A real bug the falsifiability check caught
+
+Insisting the test be able to go red found a genuine defect in the first lock: `mkdir` followed by
+writing `owner.json` leaves a window where a contender reads an owner-less lock, judges it stale,
+and **deletes a live lock**. Two builders then ran concurrently, ~1 run in 3. Acquisition is now a
+`rename` of a fully-formed staging directory — `rename` onto an existing directory fails rather
+than clobbering, so the lock is never observable without its owner.
+
+### Verified
+
+6/6 clean-state `pnpm gate` runs green at ~155s (151, 157, 155, 153, 159, 165), against a 132–145s
+baseline whose runs were not all clean-state — no regression. The guard test fails 4/4 with the
+lock removed and passes 10/10 with it.
+
+### Found on the way, not fixed
+
+**The gate is not idempotent**, for a reason unrelated to this flake and pre-existing on `main`: a
+second `pnpm gate` without `rm -rf packages/*/.wrangler` fails `types:check` in `gatekeeper-oidc`.
+
+The trap list already noted that this failure is *always* `gatekeeper-oidc`. The reason it is that
+package and never the other seven: its **tracked** `worker-configuration.d.ts` is the only one
+whose `mainModule` points into the generated tree.
+
+| package | `worker-configuration.d.ts` `mainModule` |
+|---|---|
+| **gatekeeper-oidc** | **`"./.wrangler/validate/src/oidc"`** |
+| gatekeeper-github, -homeassistant, -scheduler, workshop-backend | `"./src/…"` |
+| gatekeeper-context, -mcp, -mcp-portal | `"my-main-module"` (placeholder) |
+
+All eight have a `main` pointing at `.wrangler/validate/…`, so the difference is not the wrangler
+config — it is that `wrangler types` was last run in `gatekeeper-oidc` while a `.wrangler` tree
+existed, baking that path into a committed file. The path is gitignored, so it resolves to `any` on
+a clean tree and is *type-checked* once any build recreates it, surfacing errors in machine-written
+sources nobody authored.
+
+`exclude` in tsconfig cannot fix it — the file is reached by import, not by the `include` glob
+(tried, and reverted). Likely a one-line regeneration; not attempted here because it is outside
+OZL-256 and deserves its own verification. Until then, clear `.wrangler` between gate runs.

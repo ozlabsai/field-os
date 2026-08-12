@@ -72,21 +72,25 @@ server rejects, so the inference bug was invisible against it. The servers custo
 | OZL-255 | Stub inference server; the agent `executeCode` and `ctx.restore()` cases |
 | OZL-225 | Inference verified against a real strict OpenAI-compatible server (tool calls included) |
 | OZL-243 | **Upstream sync established** — the weekly watcher, and `b2a51b5` ported through the gate |
+| OZL-256 | **The gate made deterministic** — a per-package build lock; 6/6 green |
 | OZL-254 | Answered: dynamic workers, DOs and facets are workerd-native; only `browser` needs a substitute |
 
 ## What to pick up next
 
-**Fix the gate before leaning on it further: OZL-256.** `pnpm test` fails intermittently under
-concurrency, in two distinct ways — a build failure (`.wrangler/validate/src/server.ts not found`)
-and workerd failing to boot. Both clear on a serial re-run. Reproduced on `main`; the four tier-2
-files that each boot their own stack made the contention materially worse. This matters more than a
-normal flake because `pnpm test` **is** the cherry-pick gate, and OZL-243 just made that the thing
-every upstream port depends on. A gate that fails at random teaches people to re-run until green.
+**~~OZL-256~~ — done.** `pnpm test` was flaky under concurrency in two ways (a build failure
+naming `.wrangler/validate/src/server.ts`, and workerd failing to boot). One cause, confirmed by
+observation rather than inference: `capnweb-validate build --out .wrangler/validate` empties the
+tree before repopulating it (sampled at 150ms: `files=0` for ~0.9s, then 26, then 36), while
+wrangler's `main` points *into* that same fixed path. Concurrent builds of one package read it
+torn. Fixed with a per-package lock (`scripts/build-lock.mjs`) held across build-and-read, rather
+than by serializing the callers — the contended resource is one directory, so excluding on it fixes
+every caller including ones not yet written, and keeps the concurrency. Verified: 6/6 clean-state
+`pnpm gate` runs green, ~155s (no regression). The guard test fails 4/4 with the lock removed.
 
 **Then the two triaged upstream commits.** `docs/upstream-ports.md` lists `2508099` (dev-server
 ports, low risk) and `8b08672` (WebSocket abort on overseer DO death). The second is the direct
 follow-up to the commit just ported and touches the DO lifecycle, so unlike `b2a51b5` it genuinely
-needs the full gate — which is an argument for doing OZL-256 first.
+needs the full gate — which OZL-256 has now made trustworthy.
 
 **Cheapest first: OZL-224, 226, 227.** Three verification issues — doc/sheet/deck, admin dashboard,
 sharing — each verification rather than construction. Note OZL-226 has one real gap inside it:
@@ -214,11 +218,16 @@ before that date was gated by a developer's local run alone (OZL-253).
 
 ## Deliberate limitations, stated so they are not rediscovered
 
-- **`pnpm test` is intermittently flaky under concurrency (OZL-256).** Two symptoms, same shape: a
-  build failure naming `.wrangler/validate/src/server.ts`, or `workerd exited early with code 1`.
-  Both clear on a serial re-run, and both are contention over the shared per-package build output.
-  Re-run before believing a failure — but do not normalise it: this is the cherry-pick gate, and a
-  gate that fails at random is the thing that teaches people to re-run until green.
+- **The gate is not idempotent: a second `pnpm gate` without `rm -rf packages/*/.wrangler` fails.**
+  Deterministic, pre-existing, and *not* the OZL-256 flake — it is the `.wrangler/validate` trap
+  below, firing on `types:check` in `gatekeeper-oidc`. It is always that package because its
+  tracked `worker-configuration.d.ts` is the **only** one whose `mainModule` points into the
+  generated tree (`"./.wrangler/validate/src/oidc"`); the other seven say `"./src/…"` or the
+  `"my-main-module"` placeholder. That path is gitignored, so it resolves to `any` on a clean tree
+  and is *type-checked* once a build recreates it — machine-generated sources, with errors nobody
+  wrote. `exclude` in tsconfig cannot fix it (the file is reached by import, not by the `include`
+  glob — tried and reverted); regenerating that one file on a clean tree probably can. Clear
+  `.wrangler` between gate runs until someone does.
 - A runaway gadget interrupts the deployment until the watchdog restarts it (OZL-239).
 - On-prem MCP servers cannot be connected without disabling an orthogonal control (OZL-240).
 - Blueprints are fetchable unauthenticated by id, bypassing org separation (OZL-223).
