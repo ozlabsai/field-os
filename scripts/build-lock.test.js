@@ -90,6 +90,32 @@ describe("build lock", () => {
     }
   });
 
+  it("survives a stale-break racing an acquisition", async () => {
+    // The release and stale-break paths both remove the lock directory, and acquisition renames a
+    // staging directory *onto* that same path. A plain rmSync(recursive, force) walks the tree and
+    // then rmdir's it, so an acquisition landing mid-walk makes the rmdir throw ENOTEMPTY --
+    // `force` swallows ENOENT, not that. This reproduced on merged main as a gate failure, while
+    // the mutual-exclusion case above stayed green: exclusion held, the *cleanup* was what broke.
+    const pkgDir = mkdtempSync(join(root, "stalerace-"));
+
+    // The window is the microseconds between rimraf's walk and its rmdir, so the builders here
+    // take the lock in a tight loop rather than doing the slow build the case above uses -- many
+    // fast release/acquire handoffs is what makes the collision likely rather than theoretical.
+    const spinner = join(pkgDir, "spin.mjs");
+    writeFileSync(spinner, `
+import { withBuildLock } from ${JSON.stringify(join(HERE, "build-lock.mjs"))};
+for (let i = 0; i < 150; i++) withBuildLock(process.argv[2], () => {});
+process.stdout.write("done");
+`);
+    const runs = Array.from({ length: 8 }, () =>
+        execFile(process.execPath, [spinner, pkgDir], { encoding: "utf8" }));
+    const results = await Promise.allSettled(runs);
+
+    const crashed = results.filter((r) => r.status === "rejected");
+    assert.equal(crashed.length, 0,
+        `a builder crashed instead of taking the lock: ${crashed.map((c) => c.reason?.message).join("; ")}`);
+  });
+
   it("is reentrant within one process", () => {
     const pkgDir = mkdtempSync(join(root, "re-"));
     // A nested acquisition must not deadlock: same pid, so it proceeds.
