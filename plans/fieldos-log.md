@@ -1019,8 +1019,17 @@ Under the `disk` service, for a parent DO whose id hashes to `<parentHash>`:
 | `<parentHash>.facets` | a ~17-32 byte name→slot manifest |
 
 Read out of the actual files after checkpoint, with distinct values written from parent and facet
-(`parent-value-1` vs `child-value-1`) so the attribution is unambiguous. The manifest is literally
-length-prefixed facet names; `xxd` shows the strings we pass to `ctx.facets.get()`.
+(`parent-value-1` vs `child-value-1`) so the attribution is unambiguous. Cross-checked with `grep`
+per value: each appears in exactly one file, no cross-contamination.
+
+The manifest's format, byte-parsed: an 8-byte header, then one record per facet as
+`[2 bytes 00 00][u16 LE name length][name]`. **The slot number is not stored** — slot N is the Nth
+record, in creation order. So a migration tool cannot grep for a name and read off its slot; it
+must parse the whole ordered list. **Untested, and load-bearing if anyone builds on this:** whether
+`ctx.facets.delete()` renumbers or reuses slots. If it does, the positional mapping is not stable
+across a facet's lifetime, and a migration that assumed otherwise would silently attach the wrong
+storage. `facet-storage.test.js` pins the format by asserting the length prefix at its exact
+offset, not merely that the name appears somewhere.
 
 ### A separate process can open a facet's file as an ordinary DO
 
