@@ -100,6 +100,37 @@ function readOwner(dir) {
 }
 
 /**
+ * Remove a lock directory without racing a concurrent acquisition.
+ *
+ * `rmSync(recursive, force)` is NOT safe here. rimraf walks the directory, unlinks each entry,
+ * then `rmdir`s -- so if anything creates a file inside that window it throws `ENOTEMPTY`, which
+ * `force` does not suppress (it only swallows ENOENT). And something does: acquisition renames a
+ * staging directory *onto* this path, so a stale-break racing an acquire repopulates the tree
+ * mid-walk. Measured at 107/400 with a writer running against a concurrent rimraf.
+ *
+ * Renaming the directory aside first makes the removal atomic in the same way acquisition is: the
+ * name is freed in one step, and whatever is left is ours alone to delete at leisure.
+ *
+ * @param {string} dir The lock directory.
+ * @param {string} wrangler Its parent, where the doomed copy is parked.
+ */
+function removeLockDir(dir, wrangler) {
+  let doomed;
+  try {
+    doomed = mkdtempSync(join(wrangler, ".build.lock.dead-"));
+    rmSync(doomed, { recursive: true, force: true }); // rename needs the target gone
+    renameSync(dir, doomed);
+  } catch (err) {
+    // ENOENT: someone else already released or broke it -- the name is free, which is all we
+    // wanted. Anything else is a real filesystem problem worth surfacing.
+    if (err && err.code === "ENOENT") return;
+    throw err;
+  }
+  // Nothing can reach `doomed` by name, so this cannot race an acquisition.
+  rmSync(doomed, { recursive: true, force: true });
+}
+
+/**
  * Run `fn` with exclusive access to `pkgDir`'s wrangler build output.
  *
  * Blocks (synchronously, by design -- every caller is already a synchronous `execFileSync` build
@@ -144,7 +175,7 @@ export function withBuildLock(pkgDir, fn) {
     if (readOwner(dir)?.pid === process.pid) return fn();
 
     if (isStale(dir)) {
-      rmSync(dir, { recursive: true, force: true });
+      removeLockDir(dir, wrangler);
       continue; // retry the acquisition rather than assume we won the cleanup race
     }
 
@@ -156,6 +187,6 @@ export function withBuildLock(pkgDir, fn) {
   try {
     return fn();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeLockDir(dir, wrangler);
   }
 }
