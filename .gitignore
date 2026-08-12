@@ -56,6 +56,8 @@ packages/fieldos-runtime/__tests__/fixture/dodata/
 
 # workerd DO storage created by the tier-1 durability test (packages/workerd-tests)
 packages/workerd-tests/__tests__/fixture-do-durability/dodata/
+packages/workerd-tests/__tests__/fixture-facet-storage/dodata/
+packages/workerd-tests/__tests__/fixture-facet-storage/dodata-migrated/
 
 # standalone workerd build output and DO state (scripts/run-workerd.mjs)
 .workerd/
