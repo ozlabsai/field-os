@@ -365,6 +365,20 @@ export interface AuthenticatedApi extends RpcTarget {
   // any enforcement is switched on. Takes a named account for the same reason as above.
   getOrgForUser(username: string): Promise<OrgLookup>;
 
+  // Repair workspaces owned by `username` whose org stamp failed at creation, one page per call.
+  // Admin-only.
+  //
+  // Enforcement denies on a failed stamp rather than treating it as exempt, so an IdP outage
+  // during creation can leave workspaces that refuse every non-owner. This is the repair. It only
+  // ever touches workspaces flagged as failed; one that legitimately predates org separation is
+  // left alone, since pulling those inside the boundary is an explicit admin decision rather than
+  // a side effect of a sweep.
+  //
+  // Takes a named account because there is no user directory to sweep (see
+  // `plans/org-separation.md`); the `workspace.org.access.denied` log names the owners worth
+  // repairing. Call again with the returned `cursor` until `done`.
+  restampUnknownOrgs(username: string, startAfter?: string): Promise<OrgRestampPage>;
+
   // List the user's configured AI models.
   //
   // Note that the list returned here could be different from a particular gadget's Overseer,
@@ -749,6 +763,26 @@ export type OrgLookup = {
    * missing one: a user whose group claim was absent or ambiguous reaches nothing org-scoped.
    */
   orgId: string | null;
+};
+
+/**
+ * One page of an org re-stamp sweep (see `AdminApi.restampUnknownOrgs`).
+ *
+ * Paged rather than exhaustive because a sweep fans out one RPC per workspace, and an admin
+ * repairing a prolific user must not hang a single request on all of them.
+ */
+export type OrgRestampPage = {
+  /** Workspaces repaired in this page. Zero is the normal answer once the backlog is cleared. */
+  repaired: number;
+  /**
+   * Workspaces whose repair failed and were left as they were. Re-running the sweep retries them;
+   * a count that stays non-zero across runs means something is wrong beyond a transient blip.
+   */
+  failed: number;
+  /** Pass as `startAfter` to continue. Meaningless once `done`. */
+  cursor: string;
+  /** Whether the sweep reached the end of this user's workspaces. */
+  done: boolean;
 };
 
 export const DEFAULT_SITE_NAME = "FieldOS";

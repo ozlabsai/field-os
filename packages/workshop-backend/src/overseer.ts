@@ -6323,10 +6323,38 @@ class OverseerImpl implements AgentHooks {
       return false;
     }
 
-    return isOrgAccessAllowed(
-        { orgId: this.storage.orgId.get(), orgUnknown: this.storage.orgUnknown.get() },
-        callerOrg,
-        isCrossOrgSharingAllowed(this.env));
+    let stamp = { orgId: this.storage.orgId.get(), orgUnknown: this.storage.orgUnknown.get() };
+    if (isOrgAccessAllowed(stamp, callerOrg, isCrossOrgSharingAllowed(this.env))) return true;
+
+    // Log every denial, at error when the stamp itself failed.
+    //
+    // This is the only way an operator can find affected workspaces. Durable Objects are not
+    // enumerable and this deployment deliberately has no user directory (see
+    // plans/org-separation.md), so there is no "list every workspace with orgUnknown" to build --
+    // the log IS the list. A workspace stranded by a stamp failure during an IdP outage would
+    // otherwise be undiscoverable: its owner still gets in, so nobody notices until a
+    // collaborator complains.
+    //
+    // `orgUnknown` is error because it means a workspace is denied for a reason nobody chose,
+    // and it is fixable (re-stamp). An ordinary cross-org denial is the boundary working, so it
+    // is info -- warning on every correct denial would train operators to ignore the channel.
+    // Org ids are recorded; they are group names from the IdP, not secrets, and a denial is
+    // undiagnosable without knowing which two orgs disagreed.
+    // Written inline at both call sites rather than hoisted into a shared object: assigning the
+    // fields to a variable first widens their inferred type and slips past the log vocabulary's
+    // type check, so a typo'd or unknown field would compile.
+    if (stamp.orgUnknown) {
+      this.logger.error("denied: workspace org was never recorded", {
+        event: "workspace.org.access.denied",
+        workspaceOrg: stamp.orgId, callerOrg, orgUnknown: true,
+      });
+    } else {
+      this.logger.info("denied by the org boundary", {
+        event: "workspace.org.access.denied",
+        workspaceOrg: stamp.orgId, callerOrg, orgUnknown: false,
+      });
+    }
+    return false;
   }
 
   // Collaborator authorization / sharing / permission logic. Memoized for the DO instance.
@@ -6425,6 +6453,36 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   async getOutputsForOwnerBackfill(ownerId: string): Promise<WorkspaceOutputEntry[] | null> {
     if (this.impl.ownerId !== ownerId) return null;
     return this.impl.outputsSnapshot();
+  }
+
+  /**
+   * Re-run the org stamp on a workspace whose stamp failed at creation (OZL-216).
+   *
+   * The repair for `orgUnknown`, which enforcement denies on. Owner-gated exactly like
+   * `getOutputsForOwnerBackfill` above: the caller proves ownership by passing an id that must
+   * match, so this cannot be aimed at someone else's workspace.
+   *
+   * Only ever repairs a *failed* stamp. A workspace that legitimately carries no org (created
+   * before separation existed) is left alone -- silently stamping those on an admin's sweep would
+   * quietly pull every legacy workspace inside the boundary, which the design makes an explicit
+   * admin action rather than a side effect.
+   *
+   * @returns Whether this workspace needed repair and got it.
+   */
+  async restampOrgForOwner(ownerId: string): Promise<boolean> {
+    if (this.impl.ownerId !== ownerId) return false;
+    if (!this.impl.storage.orgUnknown.get()) return false;
+
+    let owner = this.impl.users.get(this.impl.users.idFromString(ownerId));
+    let orgId = await owner.getOrgId();
+    if (!orgId) return false;  // Still unresolvable; leave the flag set rather than clear it.
+
+    this.impl.storage.orgId.put(orgId);
+    this.impl.storage.orgUnknown.put(false);
+    this.impl.logger.info("re-stamped workspace org", {
+      event: "workspace.org.restamped", workspaceOrg: orgId,
+    });
+    return true;
   }
 
   // `notifyClosed` should be invoked when the return `Overseer` stub is disposed, which is used
