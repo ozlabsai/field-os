@@ -315,6 +315,14 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       // A denial proves this user's listing for the workspace is stale: revocation tries to drop it
       // (refreshAffectedCollaboratorListings), but that push is best-effort. Only catches entries
       // they click; others stay frozen at revocation, as a disconnected collaborator gets no pushes.
+      //
+      // Deliberately NOT `crossOrgAccessDenied`, which is why that code exists separately. An org
+      // denial does not prove the listing is stale -- the listing is correct and a deployment-wide
+      // policy flag was switched on. `forgetSharedGadget` is a hard delete of both the listing and
+      // the outputs index (user.ts), with no restore, so purging here would make
+      // ENABLE_ORG_SEPARATION a one-way door: turning it back off could not give these users their
+      // workspaces back. Keep the exact-match comparison; a `startsWith` or a set membership test
+      // over "denial-ish" codes would silently reintroduce that.
       if (getOpenGadgetErrorCode(err) === OPEN_GADGET_ERROR_CODES.workspaceAccessDenied) {
         await this.user.forgetSharedGadget(id);
       }

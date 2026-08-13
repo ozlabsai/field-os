@@ -1,6 +1,7 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName } from '@gadgets/workshop-shared/api';
+import { isCrossOrgSharingAllowed, isOrgAccessAllowed, isOrgSeparationEnabled } from "./auth/org-policy";
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -6289,6 +6290,45 @@ class OverseerImpl implements AgentHooks {
 
   #sharingManager?: SharingManager;
 
+  /**
+   * Whether a non-owner caller is permitted by the ORG boundary (OZL-216).
+   *
+   * Returns a decision rather than throwing, because the two entry points that need it fail in
+   * different idioms: `open()` throws a coded error, while `receiveExternalMessage()` returns
+   * `{accepted: false, message}`. Both must consult this -- `receiveExternalMessage` does not go
+   * through `open()` and carries its own non-owner authorization, so enforcing in only one of them
+   * would leave the other as a complete bypass of the boundary.
+   *
+   * Inert unless the deployment sets ENABLE_ORG_SEPARATION, so this returns `true` for every
+   * existing deployment until someone opts in.
+   *
+   * @param caller The caller's user DO. Already in hand at both call sites, so this adds one RPC
+   *   on the non-owner path only; owners never reach here.
+   */
+  async isOrgAccessPermitted(caller: DurableObjectStub<UserDurableObject>): Promise<boolean> {
+    if (!isOrgSeparationEnabled(this.env)) return true;
+
+    let callerOrg: string | undefined;
+    try {
+      callerOrg = (await caller.getOrgId()) ?? undefined;
+    } catch (err) {
+      // Fail closed. Creation-time stamping is deliberately best-effort (see `#stampOrg`) because
+      // failing there would turn a hiccup into a failed workspace; at the DECISION point the
+      // trade is reversed. Failing open would suspend the boundary deployment-wide for as long as
+      // a user DO is slow, on every non-owner open -- and a caller can influence when their own
+      // user DO is cold. A denial is retryable; a silently absent boundary is not observable.
+      this.logger.error("failed to read caller org, denying", {
+        event: "workspace.org.caller.read.failed", error: err,
+      });
+      return false;
+    }
+
+    return isOrgAccessAllowed(
+        { orgId: this.storage.orgId.get(), orgUnknown: this.storage.orgUnknown.get() },
+        callerOrg,
+        isCrossOrgSharingAllowed(this.env));
+  }
+
   // Collaborator authorization / sharing / permission logic. Memoized for the DO instance.
   // Resolving the owner's profile ID may require an RPC on first use; thereafter it's cached.
   async getSharingManager(): Promise<SharingManager> {
@@ -6512,6 +6552,16 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       if (!effectiveRole) {
         throw createOpenGadgetError(OPEN_GADGET_ERROR_CODES.workspaceAccessDenied);
       }
+
+      // The org boundary, checked AFTER the permission graph so a caller who never had a role
+      // cannot distinguish "wrong org" from "not shared with me" -- the org check only ever runs
+      // for someone who would otherwise have been let in. Its own denial carries a distinct code
+      // (see `crossOrgAccessDenied`) so the server keeps their listing, since this denial is a
+      // reversible policy decision rather than a lost role.
+      if (!await this.impl.isOrgAccessPermitted(clientUser)) {
+        throw createOpenGadgetError(OPEN_GADGET_ERROR_CODES.crossOrgAccessDenied);
+      }
+
       role = effectiveRole;
 
       // Ambient reconciliation may attach Gatekeepers after open() starts. Finish it before taking
@@ -6607,6 +6657,18 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       }
       let role = (await this.impl.getSharingManager()).getEffectiveRole(callerProfile.id);
       if (role !== "build") {
+        return {
+          accepted: false,
+          message: "You do not have access to interact with this workspace through its agent.",
+        };
+      }
+
+      // The org boundary applies here too. This path never calls `open()` -- it carries its own
+      // non-owner authorization, just above -- so enforcing only there would leave an external
+      // gateway (see external-message-gateway.ts) as a complete bypass: a build collaborator in
+      // the wrong org could drive the agent, which reads and writes workspace state. Same wording
+      // as the role denial above, so the boundary is not disclosed here either.
+      if (!await this.impl.isOrgAccessPermitted(caller)) {
         return {
           accepted: false,
           message: "You do not have access to interact with this workspace through its agent.",
