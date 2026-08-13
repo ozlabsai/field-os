@@ -32,6 +32,10 @@ const CONTENT = {
 export function classifyWorkspaceOpenFailure(error: unknown): WorkspaceOpenFailureKind {
   switch (getOpenGadgetErrorCode(error)) {
     case OPEN_GADGET_ERROR_CODES.workspaceAccessDenied:
+    // An org-boundary denial renders exactly like any other access denial, on purpose: the two
+    // are meant to be indistinguishable to the person refused. Only the server tells them apart,
+    // and only so it knows whether to drop their workspace listing.
+    case OPEN_GADGET_ERROR_CODES.crossOrgAccessDenied:
       return 'access-denied'
     case OPEN_GADGET_ERROR_CODES.workspaceNotFound:
       return 'not-found'

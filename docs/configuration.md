@@ -117,6 +117,35 @@ lower-sensitivity deployment; the ceiling exists so the decision is an operator'
 Where an external IdP issues the session, its expiry wins when shorter, but is still clamped to
 these ceilings — a permissive IdP cannot mint an effectively immortal session.
 
+## Org separation
+
+Multiple organizations sharing one deployment. A workspace is stamped with its creator's org at
+creation; with enforcement on, a **non-owner** may only open a workspace stamped with their own
+org. Owners always reach their own workspaces, whatever the org state — which is what keeps a
+misconfiguration recoverable rather than a lockout.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ENABLE_ORG_SEPARATION` | `false` | `"true"` enforces the boundary. Everything below is inert while this is off. |
+| `ALLOW_CROSS_ORG_SHARING` | `false` | `"true"` permits a collaborator from another org. Only consulted when the above is on. |
+
+**These are env vars, not admin settings, deliberately.** Like the sign-in configuration above,
+they gate authorization, so they must not be changeable from a compromised admin session — see the
+header of `admin-config.ts`. Changing them takes a deploy.
+
+**Read this before turning it on.** Enforcement is reversible by design, but two things are worth
+knowing first:
+
+- A workspace whose org stamp *failed* at creation (an IdP or user-DO hiccup) is denied to
+  non-owners, not treated as exempt — otherwise anything that induced that failure would mint a
+  permanently boundary-exempt workspace. Workspaces created before org separation existed carry no
+  stamp at all and stay reachable; the two cases are distinguished deliberately.
+- Verify the resolved org for real users **before** enabling. The admin read-out exists for exactly
+  that, and a boundary that denies the wrong people is far more disruptive than one not yet on.
+
+Turning the flag back off restores access with nothing lost — an org denial deliberately does not
+drop the collaborator's workspace listing, unlike a genuine loss of access.
+
 ## Usage limits
 
 Two independent modes. `ENABLE_CLOUDFLARE_LIMITS` is the upstream billing flow and is irrelevant
