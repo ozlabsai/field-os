@@ -271,6 +271,20 @@ function codedErrorFamily<Code extends string>(messages: Record<Code, string>) {
 export const OPEN_GADGET_ERROR_CODES = {
   workspaceNotFound: "WORKSPACE_NOT_FOUND",
   workspaceAccessDenied: "WORKSPACE_ACCESS_DENIED",
+  /**
+   * Refused by the org boundary rather than by the permission graph (see `plans/org-separation.md`).
+   *
+   * Distinct from `workspaceAccessDenied` for one reason, and it is not cosmetic: the server drops
+   * the caller's workspace listing on `workspaceAccessDenied`, because there a denial really does
+   * prove the listing is stale -- it is the same call revocation makes. An org denial proves no
+   * such thing. The listing is correct; a deployment-wide policy flag was switched on, and
+   * switching it off again must restore access. Deleting the listing would make that flag a
+   * one-way door.
+   *
+   * The *message* is deliberately worded identically to `workspaceAccessDenied` so the caller
+   * learns nothing about org topology -- only the code differs, and only the server reads it.
+   */
+  crossOrgAccessDenied: "CROSS_ORG_ACCESS_DENIED",
 } as const;
 
 /** An expected failure code from `AuthenticatedApi.openGadget()`. */
@@ -280,6 +294,10 @@ export type OpenGadgetErrorCode =
 const openGadgetErrors = codedErrorFamily<OpenGadgetErrorCode>({
   [OPEN_GADGET_ERROR_CODES.workspaceNotFound]: "Workspace not found.",
   [OPEN_GADGET_ERROR_CODES.workspaceAccessDenied]: "You don't have access to this workspace.",
+  // Identical to the line above, on purpose: a cross-org denial must be indistinguishable from an
+  // ordinary one to the person denied, or the message itself leaks that some other org holds a
+  // workspace at this id. Do not "clarify" this string.
+  [OPEN_GADGET_ERROR_CODES.crossOrgAccessDenied]: "You don't have access to this workspace.",
 });
 
 /** Creates an expected `openGadget()` error with a machine-readable code. */
