@@ -117,6 +117,54 @@ lower-sensitivity deployment; the ceiling exists so the decision is an operator'
 Where an external IdP issues the session, its expiry wins when shorter, but is still clamped to
 these ceilings — a permissive IdP cannot mint an effectively immortal session.
 
+## Org separation
+
+Multiple organizations sharing one deployment. A workspace is stamped with its creator's org at
+creation; with enforcement on, a **non-owner** may only open a workspace stamped with their own
+org. Owners always reach their own workspaces, whatever the org state — which is what keeps a
+misconfiguration recoverable rather than a lockout.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ENABLE_ORG_SEPARATION` | `false` | `"true"` enforces the boundary. Everything below is inert while this is off. |
+| `ALLOW_CROSS_ORG_SHARING` | `false` | `"true"` permits a collaborator from another org. Only consulted when the above is on. |
+
+**These are env vars, not admin settings, deliberately.** Like the sign-in configuration above,
+they gate authorization, so they must not be changeable from a compromised admin session — see the
+header of `admin-config.ts`. Changing them takes a deploy.
+
+**Read this before turning it on.** Enforcement is reversible by design, but two things are worth
+knowing first:
+
+- A workspace whose org stamp *failed* at creation (an IdP or user-DO hiccup) is denied to
+  non-owners, not treated as exempt — otherwise anything that induced that failure would mint a
+  permanently boundary-exempt workspace. Workspaces created before org separation existed carry no
+  stamp at all and stay reachable; the two cases are distinguished deliberately.
+- Verify the resolved org for real users **before** enabling. The admin read-out exists for exactly
+  that, and a boundary that denies the wrong people is far more disruptive than one not yet on.
+
+Turning the flag back off restores access with nothing lost — an org denial deliberately does not
+drop the collaborator's workspace listing, unlike a genuine loss of access.
+
+### Finding and fixing a workspace that was stamped during an outage
+
+Stamping is best-effort at creation, because failing there would turn a brief user-DO hiccup into a
+failed workspace. So an IdP outage can leave workspaces flagged as *stamp failed*, which then deny
+every non-owner once enforcement is on. The owner keeps working throughout — which is what makes
+this recoverable, and also why nobody notices until a collaborator complains.
+
+**The log is the list.** Every denial emits `workspace.org.access.denied`, at `error` when the
+stamp failed and `info` when the boundary is simply doing its job. There is no deployment-wide
+"show me every affected workspace": Durable Objects are not enumerable and this deployment
+deliberately has no user directory, so the log is the only way to learn which owners to repair.
+Watch for that event at `error` level after enabling.
+
+**The repair** is `restampUnknownOrgs(username)` on the admin API, which re-reads that owner's
+current org and re-stamps the workspaces whose stamp failed. It is paged — call it again with the
+returned `cursor` until `done` — and it only ever touches failed stamps. Workspaces that
+legitimately predate org separation carry no stamp at all and are left alone; pulling those inside
+the boundary stays an explicit decision rather than a side effect of a sweep.
+
 ## Usage limits
 
 Two independent modes. `ENABLE_CLOUDFLARE_LIMITS` is the upstream billing flow and is irrelevant

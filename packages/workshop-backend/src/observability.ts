@@ -8,6 +8,9 @@ export type WorkshopObservabilityFields = {
   autoProvisioned: boolean;
   blueprintId: string;
   callbackInitiated: boolean;
+  // Org separation (OZL-216). Group names resolved from the IdP, not secrets -- and a denial is
+  // undiagnosable without knowing which two orgs disagreed.
+  callerOrg: string;
   chatId: number;
   durationMs: number;
   eventName: string;
@@ -19,6 +22,7 @@ export type WorkshopObservabilityFields = {
   modelId: string;
   observerId: string;
   operation: string;
+  orgUnknown: boolean;
   outcome: "ok" | "error" | "usage_limit" | "callbacks_stalled" | "no_email" | "signups_disabled";
   path: string;
   resourceTitle: string;
@@ -28,6 +32,7 @@ export type WorkshopObservabilityFields = {
   statusCode: number;
   statusText: string;
   toolCallId: string;
+  workspaceOrg: string;
   toolName: string;
   vendorId: string;
 };

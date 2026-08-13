@@ -234,6 +234,7 @@ for (const gk of gatekeepers) {
   const OPTIONAL_FEATURE_VARS = [
     "DISABLE_PASSWORD_AUTH", "AUTH_GATEKEEPERS", "ENABLE_CLOUDFLARE_LIMITS", "PUBLIC_BASE_URL",
     "DAILY_LLM_CALL_LIMIT", "MINIMUM_CLOUDFLARE_BALANCE",
+    "ENABLE_ORG_SEPARATION", "ALLOW_CROSS_ORG_SHARING",
     // Platform AI Gateway — makes the cross-provider model catalog available. The
     // ACCOUNT_ID/API_TOKEN pair is required whenever CF_AI_GATEWAY is set (all inference goes
     // over HTTPS with tokens).

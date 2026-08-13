@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newHttpBatchRpcResponse, newWebSocketRpcSession, RpcSessionOptions } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, OrgLookup, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, OrgLookup, OrgRestampPage, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
@@ -187,6 +187,16 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     }
     return this.users.get(this.users.idFromName(username)).getOrgLookup();
   }
+
+  // Repair workspaces owned by `username` whose org stamp failed at creation. Here rather than on
+  // AdminApi for the same reason as the two above: this needs a user DO, and AdminApiImpl is
+  // documented as fully user-independent. Unlike them it writes, so it re-checks admin first.
+  async restampUnknownOrgs(username: string, startAfter?: string): Promise<OrgRestampPage> {
+    if (!this.#isAdmin()) {
+      throw new Error("Not authorized.");
+    }
+    return this.users.get(this.users.idFromName(username)).restampUnknownOrgs(startAfter);
+  }
   listModels(): Promise<AiChatAuthorInfo[]> {
     return this.user.listModels();
   }
@@ -315,6 +325,14 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       // A denial proves this user's listing for the workspace is stale: revocation tries to drop it
       // (refreshAffectedCollaboratorListings), but that push is best-effort. Only catches entries
       // they click; others stay frozen at revocation, as a disconnected collaborator gets no pushes.
+      //
+      // Deliberately NOT `crossOrgAccessDenied`, which is why that code exists separately. An org
+      // denial does not prove the listing is stale -- the listing is correct and a deployment-wide
+      // policy flag was switched on. `forgetSharedGadget` is a hard delete of both the listing and
+      // the outputs index (user.ts), with no restore, so purging here would make
+      // ENABLE_ORG_SEPARATION a one-way door: turning it back off could not give these users their
+      // workspaces back. Keep the exact-match comparison; a `startsWith` or a set membership test
+      // over "denial-ish" codes would silently reintroduce that.
       if (getOpenGadgetErrorCode(err) === OPEN_GADGET_ERROR_CODES.workspaceAccessDenied) {
         await this.user.forgetSharedGadget(id);
       }

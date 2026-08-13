@@ -86,6 +86,15 @@ declare global {
       // cluster rather than bill for it. Ignored when ENABLE_CLOUDFLARE_LIMITS is on.
       ENABLE_USAGE_QUOTAS?: string;
 
+      // Enforces the org-separation boundary when set to "true": a non-owner may only open a
+      // workspace stamped with their own org. OFF by default. Deliberately env-driven rather than
+      // an AdminConfig field -- see auth/org-policy.ts for why.
+      ENABLE_ORG_SEPARATION?: string;
+
+      // Permits cross-org collaboration when set to "true", i.e. relaxes the boundary that
+      // ENABLE_ORG_SEPARATION enforces. Default deny. Only consulted when org separation is on.
+      ALLOW_CROSS_ORG_SHARING?: string;
+
       // Public base URL of the deployment.
       PUBLIC_BASE_URL?: string;
 

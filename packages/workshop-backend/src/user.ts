@@ -1,5 +1,5 @@
 import { RpcStub } from "capnweb";
-import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult, OrgLookup, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
+import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult, OrgLookup, OrgRestampPage, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
 import { shouldAutoProvisionAccount, ambientGatekeeperMode } from "./provisioning-policy.js";
 import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-gatekeeper";
@@ -514,6 +514,58 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   async getOrgLookup(): Promise<OrgLookup> {
     if (!this.storage.created.get()) return { exists: false, orgId: null };
     return { exists: true, orgId: this.storage.orgId.get() };
+  }
+
+  /**
+   * Repair workspaces this user owns whose org stamp failed at creation (OZL-216).
+   *
+   * The fix for the state enforcement denies on. Stamping is best-effort at creation -- failing
+   * there would turn a user-DO hiccup into a failed workspace -- so an IdP outage can leave
+   * workspaces flagged `orgUnknown`, which then deny every non-owner once enforcement is on.
+   * Owners keep working throughout, which is what makes this recoverable rather than a lockout,
+   * but it also means nobody notices until a collaborator complains.
+   *
+   * Scoped to one named owner because there is nothing to sweep deployment-wide with: Durable
+   * Objects are not enumerable and this deployment deliberately builds no user directory (see
+   * `plans/org-separation.md`). The `workspace.org.access.denied` log is how an admin finds out
+   * *which* owner to name.
+   *
+   * Paged like `#backfillOutputs`, whose shape this follows: one bounded page per call, with the
+   * caller draining the rest, so a user with thousands of workspaces cannot stall one request.
+   *
+   * @param startAfter Cursor from a previous call's `cursor`, or undefined to start.
+   * @returns How many workspaces were repaired in this page, and where to resume.
+   */
+  async restampUnknownOrgs(startAfter?: string): Promise<OrgRestampPage> {
+    let targets: string[] = [];
+    let examined = 0;
+    let cursor = startAfter ?? "";
+    for (let gadget of this.storage.gadgets.list({startAfter, limit: OUTPUTS_BACKFILL_PAGE})) {
+      ++examined;
+      cursor = gadget.id;
+      // `owner` set means the workspace was shared *to* this user; only its real owner can
+      // re-stamp it, and the Overseer enforces that too.
+      if (!gadget.owner) targets.push(gadget.id);
+    }
+
+    let ownerId = this.ctx.id.toString();
+    let overseers = this.ctx.exports.OverseerDurableObject;
+    // allSettled, not all: one unreachable workspace must not abandon the rest of the page, and
+    // the admin can re-run to pick up whatever failed.
+    let results = await Promise.allSettled(targets.map(id =>
+        overseers.get(overseers.idFromString(id)).restampOrgForOwner(ownerId)));
+
+    let repaired = 0;
+    let failed = 0;
+    for (let result of results) {
+      if (result.status === "fulfilled") {
+        if (result.value) ++repaired;
+      } else {
+        ++failed;
+      }
+    }
+
+    return { repaired, failed, cursor, done: examined < OUTPUTS_BACKFILL_PAGE };
   }
 
   // Whether this account has a password set (false for gatekeeper sign-in accounts).

@@ -1,6 +1,7 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName } from '@gadgets/workshop-shared/api';
+import { isCrossOrgSharingAllowed, isOrgAccessAllowed, isOrgSeparationEnabled } from "./auth/org-policy";
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -6289,6 +6290,73 @@ class OverseerImpl implements AgentHooks {
 
   #sharingManager?: SharingManager;
 
+  /**
+   * Whether a non-owner caller is permitted by the ORG boundary (OZL-216).
+   *
+   * Returns a decision rather than throwing, because the two entry points that need it fail in
+   * different idioms: `open()` throws a coded error, while `receiveExternalMessage()` returns
+   * `{accepted: false, message}`. Both must consult this -- `receiveExternalMessage` does not go
+   * through `open()` and carries its own non-owner authorization, so enforcing in only one of them
+   * would leave the other as a complete bypass of the boundary.
+   *
+   * Inert unless the deployment sets ENABLE_ORG_SEPARATION, so this returns `true` for every
+   * existing deployment until someone opts in.
+   *
+   * @param caller The caller's user DO. Already in hand at both call sites, so this adds one RPC
+   *   on the non-owner path only; owners never reach here.
+   */
+  async isOrgAccessPermitted(caller: DurableObjectStub<UserDurableObject>): Promise<boolean> {
+    if (!isOrgSeparationEnabled(this.env)) return true;
+
+    let callerOrg: string | undefined;
+    try {
+      callerOrg = (await caller.getOrgId()) ?? undefined;
+    } catch (err) {
+      // Fail closed. Creation-time stamping is deliberately best-effort (see `#stampOrg`) because
+      // failing there would turn a hiccup into a failed workspace; at the DECISION point the
+      // trade is reversed. Failing open would suspend the boundary deployment-wide for as long as
+      // a user DO is slow, on every non-owner open -- and a caller can influence when their own
+      // user DO is cold. A denial is retryable; a silently absent boundary is not observable.
+      this.logger.error("failed to read caller org, denying", {
+        event: "workspace.org.caller.read.failed", error: err,
+      });
+      return false;
+    }
+
+    let stamp = { orgId: this.storage.orgId.get(), orgUnknown: this.storage.orgUnknown.get() };
+    if (isOrgAccessAllowed(stamp, callerOrg, isCrossOrgSharingAllowed(this.env))) return true;
+
+    // Log every denial, at error when the stamp itself failed.
+    //
+    // This is the only way an operator can find affected workspaces. Durable Objects are not
+    // enumerable and this deployment deliberately has no user directory (see
+    // plans/org-separation.md), so there is no "list every workspace with orgUnknown" to build --
+    // the log IS the list. A workspace stranded by a stamp failure during an IdP outage would
+    // otherwise be undiscoverable: its owner still gets in, so nobody notices until a
+    // collaborator complains.
+    //
+    // `orgUnknown` is error because it means a workspace is denied for a reason nobody chose,
+    // and it is fixable (re-stamp). An ordinary cross-org denial is the boundary working, so it
+    // is info -- warning on every correct denial would train operators to ignore the channel.
+    // Org ids are recorded; they are group names from the IdP, not secrets, and a denial is
+    // undiagnosable without knowing which two orgs disagreed.
+    // Written inline at both call sites rather than hoisted into a shared object: assigning the
+    // fields to a variable first widens their inferred type and slips past the log vocabulary's
+    // type check, so a typo'd or unknown field would compile.
+    if (stamp.orgUnknown) {
+      this.logger.error("denied: workspace org was never recorded", {
+        event: "workspace.org.access.denied",
+        workspaceOrg: stamp.orgId, callerOrg, orgUnknown: true,
+      });
+    } else {
+      this.logger.info("denied by the org boundary", {
+        event: "workspace.org.access.denied",
+        workspaceOrg: stamp.orgId, callerOrg, orgUnknown: false,
+      });
+    }
+    return false;
+  }
+
   // Collaborator authorization / sharing / permission logic. Memoized for the DO instance.
   // Resolving the owner's profile ID may require an RPC on first use; thereafter it's cached.
   async getSharingManager(): Promise<SharingManager> {
@@ -6385,6 +6453,36 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   async getOutputsForOwnerBackfill(ownerId: string): Promise<WorkspaceOutputEntry[] | null> {
     if (this.impl.ownerId !== ownerId) return null;
     return this.impl.outputsSnapshot();
+  }
+
+  /**
+   * Re-run the org stamp on a workspace whose stamp failed at creation (OZL-216).
+   *
+   * The repair for `orgUnknown`, which enforcement denies on. Owner-gated exactly like
+   * `getOutputsForOwnerBackfill` above: the caller proves ownership by passing an id that must
+   * match, so this cannot be aimed at someone else's workspace.
+   *
+   * Only ever repairs a *failed* stamp. A workspace that legitimately carries no org (created
+   * before separation existed) is left alone -- silently stamping those on an admin's sweep would
+   * quietly pull every legacy workspace inside the boundary, which the design makes an explicit
+   * admin action rather than a side effect.
+   *
+   * @returns Whether this workspace needed repair and got it.
+   */
+  async restampOrgForOwner(ownerId: string): Promise<boolean> {
+    if (this.impl.ownerId !== ownerId) return false;
+    if (!this.impl.storage.orgUnknown.get()) return false;
+
+    let owner = this.impl.users.get(this.impl.users.idFromString(ownerId));
+    let orgId = await owner.getOrgId();
+    if (!orgId) return false;  // Still unresolvable; leave the flag set rather than clear it.
+
+    this.impl.storage.orgId.put(orgId);
+    this.impl.storage.orgUnknown.put(false);
+    this.impl.logger.info("re-stamped workspace org", {
+      event: "workspace.org.restamped", workspaceOrg: orgId,
+    });
+    return true;
   }
 
   // `notifyClosed` should be invoked when the return `Overseer` stub is disposed, which is used
@@ -6512,6 +6610,16 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       if (!effectiveRole) {
         throw createOpenGadgetError(OPEN_GADGET_ERROR_CODES.workspaceAccessDenied);
       }
+
+      // The org boundary, checked AFTER the permission graph so a caller who never had a role
+      // cannot distinguish "wrong org" from "not shared with me" -- the org check only ever runs
+      // for someone who would otherwise have been let in. Its own denial carries a distinct code
+      // (see `crossOrgAccessDenied`) so the server keeps their listing, since this denial is a
+      // reversible policy decision rather than a lost role.
+      if (!await this.impl.isOrgAccessPermitted(clientUser)) {
+        throw createOpenGadgetError(OPEN_GADGET_ERROR_CODES.crossOrgAccessDenied);
+      }
+
       role = effectiveRole;
 
       // Ambient reconciliation may attach Gatekeepers after open() starts. Finish it before taking
@@ -6607,6 +6715,18 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       }
       let role = (await this.impl.getSharingManager()).getEffectiveRole(callerProfile.id);
       if (role !== "build") {
+        return {
+          accepted: false,
+          message: "You do not have access to interact with this workspace through its agent.",
+        };
+      }
+
+      // The org boundary applies here too. This path never calls `open()` -- it carries its own
+      // non-owner authorization, just above -- so enforcing only there would leave an external
+      // gateway (see external-message-gateway.ts) as a complete bypass: a build collaborator in
+      // the wrong org could drive the agent, which reads and writes workspace state. Same wording
+      // as the role denial above, so the boundary is not disclosed here either.
+      if (!await this.impl.isOrgAccessPermitted(caller)) {
         return {
           accepted: false,
           message: "You do not have access to interact with this workspace through its agent.",

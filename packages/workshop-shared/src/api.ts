@@ -271,6 +271,20 @@ function codedErrorFamily<Code extends string>(messages: Record<Code, string>) {
 export const OPEN_GADGET_ERROR_CODES = {
   workspaceNotFound: "WORKSPACE_NOT_FOUND",
   workspaceAccessDenied: "WORKSPACE_ACCESS_DENIED",
+  /**
+   * Refused by the org boundary rather than by the permission graph (see `plans/org-separation.md`).
+   *
+   * Distinct from `workspaceAccessDenied` for one reason, and it is not cosmetic: the server drops
+   * the caller's workspace listing on `workspaceAccessDenied`, because there a denial really does
+   * prove the listing is stale -- it is the same call revocation makes. An org denial proves no
+   * such thing. The listing is correct; a deployment-wide policy flag was switched on, and
+   * switching it off again must restore access. Deleting the listing would make that flag a
+   * one-way door.
+   *
+   * The *message* is deliberately worded identically to `workspaceAccessDenied` so the caller
+   * learns nothing about org topology -- only the code differs, and only the server reads it.
+   */
+  crossOrgAccessDenied: "CROSS_ORG_ACCESS_DENIED",
 } as const;
 
 /** An expected failure code from `AuthenticatedApi.openGadget()`. */
@@ -280,6 +294,10 @@ export type OpenGadgetErrorCode =
 const openGadgetErrors = codedErrorFamily<OpenGadgetErrorCode>({
   [OPEN_GADGET_ERROR_CODES.workspaceNotFound]: "Workspace not found.",
   [OPEN_GADGET_ERROR_CODES.workspaceAccessDenied]: "You don't have access to this workspace.",
+  // Identical to the line above, on purpose: a cross-org denial must be indistinguishable from an
+  // ordinary one to the person denied, or the message itself leaks that some other org holds a
+  // workspace at this id. Do not "clarify" this string.
+  [OPEN_GADGET_ERROR_CODES.crossOrgAccessDenied]: "You don't have access to this workspace.",
 });
 
 /** Creates an expected `openGadget()` error with a machine-readable code. */
@@ -346,6 +364,20 @@ export interface AuthenticatedApi extends RpcTarget {
   // access breaks. An admin can check what a given account resolved to at its last sign-in before
   // any enforcement is switched on. Takes a named account for the same reason as above.
   getOrgForUser(username: string): Promise<OrgLookup>;
+
+  // Repair workspaces owned by `username` whose org stamp failed at creation, one page per call.
+  // Admin-only.
+  //
+  // Enforcement denies on a failed stamp rather than treating it as exempt, so an IdP outage
+  // during creation can leave workspaces that refuse every non-owner. This is the repair. It only
+  // ever touches workspaces flagged as failed; one that legitimately predates org separation is
+  // left alone, since pulling those inside the boundary is an explicit admin decision rather than
+  // a side effect of a sweep.
+  //
+  // Takes a named account because there is no user directory to sweep (see
+  // `plans/org-separation.md`); the `workspace.org.access.denied` log names the owners worth
+  // repairing. Call again with the returned `cursor` until `done`.
+  restampUnknownOrgs(username: string, startAfter?: string): Promise<OrgRestampPage>;
 
   // List the user's configured AI models.
   //
@@ -731,6 +763,26 @@ export type OrgLookup = {
    * missing one: a user whose group claim was absent or ambiguous reaches nothing org-scoped.
    */
   orgId: string | null;
+};
+
+/**
+ * One page of an org re-stamp sweep (see `AdminApi.restampUnknownOrgs`).
+ *
+ * Paged rather than exhaustive because a sweep fans out one RPC per workspace, and an admin
+ * repairing a prolific user must not hang a single request on all of them.
+ */
+export type OrgRestampPage = {
+  /** Workspaces repaired in this page. Zero is the normal answer once the backlog is cleared. */
+  repaired: number;
+  /**
+   * Workspaces whose repair failed and were left as they were. Re-running the sweep retries them;
+   * a count that stays non-zero across runs means something is wrong beyond a transient blip.
+   */
+  failed: number;
+  /** Pass as `startAfter` to continue. Meaningless once `done`. */
+  cursor: string;
+  /** Whether the sweep reached the end of this user's workspaces. */
+  done: boolean;
 };
 
 export const DEFAULT_SITE_NAME = "FieldOS";
