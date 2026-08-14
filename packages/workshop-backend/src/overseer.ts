@@ -6305,6 +6305,25 @@ class OverseerImpl implements AgentHooks {
    * @param caller The caller's user DO. Already in hand at both call sites, so this adds one RPC
    *   on the non-owner path only; owners never reach here.
    */
+  /**
+   * The workspace owner's current org, or undefined if they have none or it cannot be read.
+   *
+   * Read live rather than cached: this feeds session-scoped org filtering, and a stale value fails
+   * open. Undefined on failure is safe here because the consumer treats "no org" as matching no
+   * org-tagged data -- unlike `isOrgAccessPermitted`, where undefined would be a decision.
+   */
+  async ownerOrgId(): Promise<string | undefined> {
+    if (!this.ownerId) return undefined;
+    try {
+      return (await this.#ownerUserDo().getOrgId()) ?? undefined;
+    } catch (err) {
+      this.logger.warn("failed to read owner org for session context", {
+        event: "workspace.org.owner.read.failed", error: err,
+      });
+      return undefined;
+    }
+  }
+
   async isOrgAccessPermitted(caller: DurableObjectStub<UserDurableObject>): Promise<boolean> {
     if (!isOrgSeparationEnabled(this.env)) return true;
 
@@ -9588,8 +9607,16 @@ class GatekeeperClientImpl<Session extends RpcCompatible<Session>>
   }
 
   async openSession(): Promise<RpcStub<Session>> {
+    // The owner's org, supplied fresh per session so a gatekeeper holding org-scoped data can
+    // filter on it (OZL-217). Deliberately not baked into the gatekeeper's props: an existing
+    // account is never re-provisioned, so a value stored there would go stale permanently and
+    // silently. The *owner's* org, not the caller's, because an ambient singleton is reached
+    // through the owner's stored account (see ensureAmbientCapsules) -- the capability being
+    // exercised is theirs.
+    let context = { orgId: await this.impl.ownerOrgId() };
     // @ts-expect-error TODO: Remove annotation when Cap'n Web fixes cyclic type issues
-    return this.facet.startSession(new ApprovalQueueImpl(this.impl, this.id, this.caller));
+    return this.facet.startSession(
+        new ApprovalQueueImpl(this.impl, this.id, this.caller), context);
   }
 
   async getCreationSpec(): Promise<GatekeeperCreationSpec> {

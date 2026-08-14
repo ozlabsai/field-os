@@ -141,6 +141,13 @@ export type ContextCollectionSummary = {
   description: string;
   icon?: string;
   visibility: ContextCollectionVisibility;
+  /**
+   * For a public collection, the org it belongs to (OZL-217). Undefined on collections created
+   * before org scoping existed; those are hidden once separation is enabled rather than treated as
+   * visible to all, so enabling the boundary is a visible, correctable step instead of a silent
+   * hole. An admin tags what should stay visible.
+   */
+  orgId?: string;
   documentCount: number;
   lastUpdated: Date;
 };
