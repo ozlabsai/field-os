@@ -82,6 +82,9 @@ export class LibraryReadSession extends RpcTarget {
     // Private collections are per-account and never shared, so they are never org-filtered; only
     // the public ones carry an org tag.
     let tags = await this.#userLib().getPublicCollectionOrgTags(this.domain);
+    // Deleting the CURRENT key during `for...of` over a Map is well-defined and visits every
+    // remaining entry. Keep it that way: deleting some other key mid-iteration is not, and this is
+    // the filter the whole boundary rests on.
     for (let [id, visibility] of enabled) {
       if (visibility !== "public") continue;
       if (!isCollectionVisibleToOrg(
