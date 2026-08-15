@@ -72,8 +72,19 @@ need Legal to review an Engineering tool turn it on.
 
 **5. Blueprints stay deployment-wide. Deferred, deliberately.**
 A blueprint is a recipe — code and metadata — and the data boundary is the workspace. Scoping them
-breaks the deliberately public `PublicApi.getBlueprint`, which the deploy wizard and screenshot
-serving depend on, and needs a new field, admin UI and migration.
+breaks the deliberately public `PublicApi.getBlueprint` and needs a new field, admin UI and
+migration.
+
+> **Corrected 2026-08-16, by audit.** This previously said the public fetch is what "the deploy
+> wizard and screenshot serving depend on". **Both halves are false.** Screenshot serving reads R2
+> directly (`server.ts:678-691`, inside the top-level `fetch()` before any RPC session) and never
+> calls `getBlueprint`; and no deploy-wizard code calls it — the "deploy wizard" here is the
+> connector-install wizard, unrelated to blueprints. The real dependency is the **signed-out
+> blueprint landing page** (`BlueprintLandingPage.tsx:101`), reached via the explicitly public
+> `/blueprint/*` route (`__root.tsx:35-38`); requiring auth would kill the share-link onboarding
+> flow `docs/blueprints.md:11,148-152` documents as intended. The risk recorded below is accurate;
+> its stated blockers were not. Note also that `/blueprint-screenshot/*` is a separate anonymous
+> surface that stays open regardless (OZL-223).
 
 Recorded so the tradeoff is not lost: blueprints are fetchable **unauthenticated, by id**, and a
 blueprint reveals schemas, API shapes and internal terminology. In a deployment where "what Legal
