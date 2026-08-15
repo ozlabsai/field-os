@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MAX_IDLE_MINUTES, DEFAULT_MAX_LIFETIME_HOURS,
-  getSessionCeiling, resolveSessionPolicy, sessionExpiry,
+  getSessionCeiling, resolveSessionPolicy, sessionBoundsView, sessionExpiry,
 } from "../src/auth/session-policy.js";
 
 const HOUR = 60 * 60 * 1000;
@@ -83,5 +83,55 @@ describe("sessionExpiry", () => {
   it("clamps an IdP expiry beyond our ceiling", () => {
     expect(sessionExpiry(policy, now, new Date("2027-08-09T12:00:00Z")))
         .toEqual(new Date("2026-08-10T00:00:00Z"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OZL-226: what the admin panel is shown.
+//
+// The panel displays three numbers per bound -- the env ceiling, the admin's stored choice, and
+// what is actually in force -- because the stored value and the effective one are NOT the same:
+// clamping happens at read time, so lowering the ceiling tightens sessions without rewriting
+// config. A panel echoing back only the stored value would display a number that is not in effect,
+// which is precisely the confusion this read-out exists to prevent.
+//
+// `sessionBoundsView` is the pure projection behind `AdminSettings.getSettings()`, kept here so the
+// rule is testable without a Durable Object.
+describe("session bounds as the admin panel sees them", () => {
+  const ceiling = env({ SESSION_MAX_LIFETIME_HOURS: "12", SESSION_MAX_IDLE_MINUTES: "60" });
+
+  it("reports the ceiling as effective when the admin has chosen nothing", () => {
+    expect(sessionBoundsView(ceiling, {})).toEqual({
+      ceilingLifetimeHours: 12, ceilingIdleMinutes: 60,
+      lifetimeHours: undefined, idleMinutes: undefined,
+      effectiveLifetimeHours: 12, effectiveIdleMinutes: 60,
+    });
+  });
+
+  it("reports the admin's choice as effective when it tightens", () => {
+    let view = sessionBoundsView(ceiling, { sessionLifetimeHours: 8, sessionIdleMinutes: 30 });
+    expect(view.lifetimeHours).toBe(8);
+    expect(view.effectiveLifetimeHours).toBe(8);
+    expect(view.effectiveIdleMinutes).toBe(30);
+  });
+
+  // THE case the read-out exists for. A stored value above the ceiling stays stored (so raising the
+  // ceiling later restores the admin's intent) but is NOT in force. Showing only `lifetimeHours`
+  // here would tell an admin their sessions last 720 hours when they in fact last 12.
+  it("distinguishes a stored above-ceiling value from the value in force", () => {
+    let view = sessionBoundsView(ceiling, { sessionLifetimeHours: 720, sessionIdleMinutes: 10_080 });
+    expect(view.lifetimeHours).toBe(720);
+    expect(view.effectiveLifetimeHours).toBe(12);
+    expect(view.idleMinutes).toBe(10_080);
+    expect(view.effectiveIdleMinutes).toBe(60);
+  });
+
+  // Lowering the ceiling must move the effective value without touching the stored one.
+  it("re-reports effective values when the ceiling is lowered", () => {
+    let lowered = env({ SESSION_MAX_LIFETIME_HOURS: "2", SESSION_MAX_IDLE_MINUTES: "5" });
+    let view = sessionBoundsView(lowered, { sessionLifetimeHours: 8, sessionIdleMinutes: 30 });
+    expect(view.ceilingLifetimeHours).toBe(2);
+    expect(view.lifetimeHours).toBe(8);
+    expect(view.effectiveLifetimeHours).toBe(2);
   });
 });

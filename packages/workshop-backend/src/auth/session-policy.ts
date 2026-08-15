@@ -1,3 +1,5 @@
+import type { AdminSessionBounds } from "@gadgets/workshop-shared/api";
+
 // Session lifetime policy: how long a login session stays valid.
 //
 // Two-layer design, deliberate. The env vars set a **ceiling** an admin cannot exceed; the admin
@@ -68,6 +70,33 @@ export function resolveSessionPolicy(
   return {
     lifetimeMs: Math.min(lifetime, ceiling.lifetimeMs),
     idleMs: Math.min(idle, ceiling.idleMs),
+  };
+}
+
+/**
+ * The session bounds as the admin panel shows them: the env ceiling, the admin's stored choice, and
+ * what is actually in force (OZL-226).
+ *
+ * Three numbers rather than one, because the stored value and the effective value differ whenever
+ * the admin's choice is looser than the ceiling — clamping happens here on read, not at write time.
+ * A panel echoing back only what was saved would display a number that is not in effect.
+ *
+ * Pure, and lives beside the rule it projects rather than in the Durable Object, so it is testable
+ * without one.
+ */
+export function sessionBoundsView(
+  env: Cloudflare.Env,
+  admin: { sessionLifetimeHours?: number; sessionIdleMinutes?: number },
+): AdminSessionBounds {
+  const ceiling = getSessionCeiling(env);
+  const effective = resolveSessionPolicy(env, admin);
+  return {
+    ceilingLifetimeHours: ceiling.lifetimeMs / (60 * 60 * 1000),
+    ceilingIdleMinutes: ceiling.idleMs / (60 * 1000),
+    lifetimeHours: admin.sessionLifetimeHours,
+    idleMinutes: admin.sessionIdleMinutes,
+    effectiveLifetimeHours: effective.lifetimeMs / (60 * 60 * 1000),
+    effectiveIdleMinutes: effective.idleMs / (60 * 1000),
   };
 }
 
