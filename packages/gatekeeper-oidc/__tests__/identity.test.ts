@@ -138,6 +138,66 @@ describe("resolveOrg", () => {
     expect(resolveOrg(claims({ groups: ["fieldos-legal"] }), {})).toBeUndefined();
   });
 
+  // Keycloak's group-membership mapper defaults `full.path` to true (verified against the mapper
+  // source: property "full.path" setDefaultValue("true"), help text "/top/level1/level2"), so a
+  // NESTED group arrives as a path. Stripping only the leading slash left `eng/fieldos-legal`,
+  // which fails a `fieldos-` prefix test -- so under Keycloak's DEFAULT configuration every user
+  // in a nested group silently resolved to no org, indistinguishable from having none.
+  it("matches the last segment of a nested Keycloak path", () => {
+    expect(resolveOrg(claims({ groups: ["/eng/fieldos-legal"] }), withPrefix)).toBe("legal");
+  });
+
+  it("matches a deeply nested path", () => {
+    expect(resolveOrg(claims({ groups: ["/corp/eng/backend/fieldos-legal"] }), withPrefix))
+        .toBe("legal");
+  });
+
+  // Without a prefix the org is the group's leaf name, never the whole path -- otherwise the org
+  // id would silently vary with where an admin happened to nest the group.
+  it("uses the leaf name when no prefix is configured", () => {
+    expect(resolveOrg(claims({ groups: ["/eng/legal"] }), { claim: "groups" })).toBe("legal");
+  });
+
+  it("ignores a trailing slash rather than yielding an empty org", () => {
+    expect(resolveOrg(claims({ groups: ["/eng/"] }), { claim: "groups" })).toBeUndefined();
+  });
+
+  // Entra's group overage: above 200 groups (JWT) it omits the claim entirely and substitutes
+  // `_claim_names`/`_claim_sources` pointing at Microsoft Graph, unreachable airgapped. Without
+  // detection this is byte-identical to a user in no groups, so a tenant-wide misconfiguration
+  // presents as a few users quietly lacking access.
+  describe("Entra group overage", () => {
+    const overage = () => {
+      let payload = claims();
+      delete payload.groups;
+      payload._claim_names = { groups: "src1" };
+      payload._claim_sources = { src1: { endpoint: "https://graph.microsoft.com/..." } };
+      return payload;
+    };
+
+    it("reports the overage rather than silently yielding no org", () => {
+      let seen: string[] = [];
+      expect(resolveOrg(overage(), withPrefix, c => seen.push(c))).toBeUndefined();
+      expect(seen).toEqual(["groups"]);
+    });
+
+    // Sign-in must still succeed: resolveOrg runs inside verifyIdToken, so throwing would turn a
+    // claim misconfiguration into a login outage -- which is exactly what the Workshop's own
+    // #resolveOrg declines to do.
+    it("does not throw", () => {
+      expect(() => resolveOrg(overage(), withPrefix)).not.toThrow();
+    });
+
+    // A token carrying distributed claims for something unrelated is not an overage of ours.
+    it("ignores _claim_names for a different claim", () => {
+      let seen: string[] = [];
+      let payload = claims({ groups: ["fieldos-legal"] });
+      payload._claim_names = { address: "src1" };
+      expect(resolveOrg(payload, withPrefix, c => seen.push(c))).toBe("legal");
+      expect(seen).toEqual([]);
+    });
+  });
+
   it("uses every group when no prefix is configured", () => {
     expect(resolveOrg(claims({ groups: ["legal"] }), { claim: "groups" })).toBe("legal");
     expect(resolveOrg(claims({ groups: ["legal", "eng"] }), { claim: "groups" })).toBeUndefined();

@@ -110,6 +110,16 @@ export type ContextCollectionMetadata = {
 
   visibility: ContextCollectionVisibility;
 
+  /**
+   * For a public collection, the org that may see it (OZL-291). Undefined on a private collection
+   * (already per-account) and on a public one created before org scoping existed.
+   *
+   * The durable home of the tag. `ContextCollectionSummary.orgId` is a denormalized copy that
+   * `metadataToSummary` derives from this, so a tag stored only on the summary would be erased by
+   * the next `#propagate()` — an edit to an unrelated field would silently untag the collection.
+   */
+  orgId?: string;
+
   created: Date;
   lastUpdated: Date;
 
@@ -309,12 +319,27 @@ export function isMarkdownContentType(contentType: string): boolean {
 
 // Per-account management API exposed to the gatekeeper app iframe.
 export interface ContextApi extends RpcTarget {
-  // Gates creating/editing public collections and offering Git-backed collections.
-  getViewerInfo(): Promise<{ isAdmin: boolean; supportsGitCollections: boolean }>;
+  /**
+   * Gates creating/editing public collections and offering Git-backed collections.
+   *
+   * `orgSeparationEnabled` tells the UI whether to require an org on a new public collection;
+   * `orgId` is the viewer's own org, used to prefill it. `knownOrgs` are the orgs already in use by
+   * public collections this viewer can see — suggestions only, since the deployment keeps no org
+   * directory (there is nothing to enumerate: an org is whatever an IdP group claim yields).
+   */
+  getViewerInfo(): Promise<{
+    isAdmin: boolean;
+    supportsGitCollections: boolean;
+    orgSeparationEnabled: boolean;
+    orgId?: string;
+    knownOrgs: string[];
+  }>;
 
   createContextCollection(
     title: string, description: string, visibility: ContextCollectionVisibility, icon?: string,
     source?: ContextCollectionContent["source"],
+    /** Required for a public collection when the deployment separates orgs. Ignored otherwise. */
+    orgId?: string,
   ): Promise<ContextCollectionMetadata>;
   updateContextCollection(collectionId: string, options: {
     title?: string; description?: string; icon?: string; branch?: string;

@@ -717,6 +717,11 @@ function CreateCollectionView({
   // Only admins may create public collections.
   const [isAdmin, setIsAdmin] = useState(false);
   const [supportsGitCollections, setSupportsGitCollections] = useState(false);
+  // Org tagging for public collections. `orgSeparationEnabled` decides whether the field is shown
+  // and required at all; `knownOrgs` are suggestions only (the deployment keeps no org directory).
+  const [orgSeparationEnabled, setOrgSeparationEnabled] = useState(false);
+  const [knownOrgs, setKnownOrgs] = useState<string[]>([]);
+  const [orgId, setOrgId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -726,12 +731,19 @@ function CreateCollectionView({
         if (!cancelled) {
           setIsAdmin(info.isAdmin);
           setSupportsGitCollections(info.supportsGitCollections);
+          setOrgSeparationEnabled(info.orgSeparationEnabled);
+          setKnownOrgs(info.knownOrgs);
+          // Prefill the admin's own org: the common case is publishing into it, so this is a
+          // confirmation rather than a recall. Blank when they have none (e.g. password auth).
+          setOrgId(info.orgId ?? "");
         }
       })
       .catch(() => {
         if (!cancelled) {
           setIsAdmin(false);
           setSupportsGitCollections(false);
+          setOrgSeparationEnabled(false);
+          setKnownOrgs([]);
         }
       });
     return () => {
@@ -739,8 +751,13 @@ function CreateCollectionView({
     };
   }, [context]);
 
+  // A public collection must name an org when the deployment separates them, since an untagged one
+  // is visible to nobody. Mirrors the server-side check in createContextCollection.
+  const needsOrg = visibility === "public" && orgSeparationEnabled;
+  const canCreate = !!title.trim() && (!needsOrg || !!orgId.trim());
+
   const handleCreate = async () => {
-    if (!title.trim() || creating) return;
+    if (!canCreate || creating) return;
     setCreating(true);
     try {
       const metadata = await context.createContextCollection(
@@ -749,6 +766,7 @@ function CreateCollectionView({
         visibility,
         icon,
         source,
+        needsOrg ? orgId.trim() : undefined,
       );
       toasts.add({ title: "Collection created", variant: "success" });
       onCreated(metadata.id);
@@ -889,6 +907,35 @@ function CreateCollectionView({
                 </div>
               </div>
             )}
+            {/* Org tag. Shown only for a public collection on a deployment that separates orgs —
+                everywhere else the boundary does not exist and the field would be noise. Free text
+                with suggestions rather than a dropdown: an org is whatever an IdP group claim
+                yields, so there is no directory to enumerate. */}
+            {needsOrg && (
+              <div className="ctx-rise" style={{ animationDelay: "240ms" }}>
+                <FieldLabel>Organization</FieldLabel>
+                <WorkshopInput
+                  value={orgId}
+                  onChange={(event) => setOrgId(event.target.value)}
+                  list="ctx-known-orgs"
+                  placeholder="e.g. legal"
+                  aria-describedby="ctx-org-help"
+                />
+                <datalist id="ctx-known-orgs">
+                  {knownOrgs.map((org) => (
+                    <option key={org} value={org} />
+                  ))}
+                </datalist>
+                <p
+                  id="ctx-org-help"
+                  className="mt-1.5 text-[12px] leading-4 tracking-[-0.2px] text-kumo-subtle"
+                >
+                  Only members of this organization will see the collection. It must be named
+                  exactly as your identity provider reports it — an unrecognized name is visible to
+                  no one.
+                </p>
+              </div>
+            )}
           </div>
 
           <div
@@ -910,7 +957,7 @@ function CreateCollectionView({
               tone="primary"
               onClick={handleCreate}
               loading={creating}
-              disabled={!title.trim()}
+              disabled={!canCreate}
               className="press !bg-kumo-brand text-white enabled:hover:!bg-kumo-brand-hover disabled:!bg-kumo-fill disabled:!text-kumo-inactive disabled:!opacity-100"
             >
               Create collection

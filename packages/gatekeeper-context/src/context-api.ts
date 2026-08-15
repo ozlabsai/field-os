@@ -15,16 +15,29 @@ import {
   listPublicCollectionsFromKv, metadataToSummary,
 } from "./collection-kv.js";
 import { domainName } from "./domain.js";
+import { isCollectionVisibleToOrg, isOrgSeparationEnabled } from "./org-scoping.js";
 
 // Collections visible to this account's agents.
+//
+// `readerOrg` scopes the public half (OZL-291). This is the SECOND union computing owned ∪ public —
+// the agent's own gating union is `getEnabledCollections` in user-library.ts, fixed separately in
+// OZL-217. Both must filter: this one feeds the management iframe and `getAgentCatalog`, so leaving
+// it unscoped would hide cross-org collections from the agent's reads while still showing it their
+// titles, and show them in full in the UI.
 export async function loadEnabledContextCollections(
     env: Pick<Cloudflare.Env, "CONTEXT_COLLECTIONS">,
     domain: string,
-    userLibrary: DurableObjectStub<UserLibraryDurableObject>): Promise<EnabledCollectionInfo[]> {
+    userLibrary: DurableObjectStub<UserLibraryDurableObject>,
+    readerOrg: string | undefined,
+    orgSeparationEnabled: boolean): Promise<EnabledCollectionInfo[]> {
   let [owned, publicCollections] = await Promise.all([
     userLibrary.listOwnedCollections(),
     listPublicCollectionsFromKv(env, domain),
   ]);
+  // Owned collections are private and per-account, so they need no org filter — only the public
+  // half crosses accounts.
+  publicCollections = publicCollections.filter(
+      c => isCollectionVisibleToOrg(c, readerOrg, orgSeparationEnabled));
 
   let result: EnabledCollectionInfo[] = [];
   let seen = new Set<string>();
@@ -61,6 +74,7 @@ export class ContextApiImpl extends RpcTarget implements ContextApi {
     private domain: string,
     private accountId: string,
     private isAdmin: boolean,
+    private orgId: string | undefined,
     private collections: DurableObjectNamespace<ContextCollectionDurableObject>,
     private userLibraries: DurableObjectNamespace<UserLibraryDurableObject>,
     private registries: DurableObjectNamespace<LibraryRegistryDurableObject>,
@@ -85,25 +99,41 @@ export class ContextApiImpl extends RpcTarget implements ContextApi {
     return this.#userLib().hasOwned(collectionId);
   }
 
-  // Read: own private collections or any public collection.
+  // Whether a public collection is in this viewer's org (OZL-291).
+  //
+  // Reads the tag from the domain's public snapshot rather than the collection DO: the snapshot is
+  // the same source every other read path filters on, so a collection can never be visible in a
+  // listing and denied by a guard (or the reverse). An id absent from the snapshot is not public,
+  // and the callers below only consult this once `isPublic` says otherwise.
+  async #publicCollectionInOrg(collectionId: string): Promise<boolean> {
+    let entry = (await listPublicCollectionsFromKv(this.env, this.domain))
+        .find(c => c.id === collectionId);
+    if (!entry) return false;
+    return isCollectionVisibleToOrg(entry, this.orgId, isOrgSeparationEnabled(this.env));
+  }
+
+  // Read: own private collections, or a public collection in this viewer's org.
   async #assertCanRead(collectionId: string): Promise<void> {
     let [owns, isPublic] = await Promise.all([
       this.#ownsPrivate(collectionId),
       this.#registry().isPublic(collectionId),
     ]);
-    if (!owns && !isPublic) {
-      throw new Error("Collection not found or you don't have access.");
-    }
+    if (owns) return;
+    if (isPublic && await this.#publicCollectionInOrg(collectionId)) return;
+    throw new Error("Collection not found or you don't have access.");
   }
 
-  // Write: own private collections, or public collections for admins.
+  // Write: own private collections, or public collections for admins — but only within the admin's
+  // own org. Admins are deployment-wide and flat (`ADMINS` env list), so without the org dimension
+  // one org's admin could edit another org's public collection: the boundary would scope reads
+  // while leaving writes global.
   async #assertCanWrite(collectionId: string): Promise<void> {
     let [owns, isPublic] = await Promise.all([
       this.#ownsPrivate(collectionId),
       this.#registry().isPublic(collectionId),
     ]);
     if (owns) return;
-    if (isPublic && this.isAdmin) return;
+    if (isPublic && this.isAdmin && await this.#publicCollectionInOrg(collectionId)) return;
     throw new Error("Collection not found or you don't have access.");
   }
 
@@ -117,8 +147,34 @@ export class ContextApiImpl extends RpcTarget implements ContextApi {
     if (!this.isAdmin) throw new Error("Admin access required.");
   }
 
-  async getViewerInfo(): Promise<{ isAdmin: boolean; supportsGitCollections: boolean }> {
-    return { isAdmin: this.isAdmin, supportsGitCollections: !!this.env.ARTIFACTS };
+  async getViewerInfo(): Promise<{
+    isAdmin: boolean;
+    supportsGitCollections: boolean;
+    orgSeparationEnabled: boolean;
+    orgId?: string;
+    knownOrgs: string[];
+  }> {
+    let orgSeparationEnabled = isOrgSeparationEnabled(this.env);
+    return {
+      isAdmin: this.isAdmin,
+      supportsGitCollections: !!this.env.ARTIFACTS,
+      orgSeparationEnabled,
+      orgId: this.orgId,
+      // Suggestions, not a directory. The deployment stores no list of orgs -- an org is whatever
+      // an IdP group claim yields -- so the only honest source is the tags already in use. Scoped
+      // to what this viewer can see, so the picker never discloses another org's existence.
+      knownOrgs: orgSeparationEnabled && this.isAdmin ? await this.#knownOrgs() : [],
+    };
+  }
+
+  // Distinct org tags on public collections visible to this viewer, sorted for a stable picker.
+  async #knownOrgs(): Promise<string[]> {
+    let orgs = new Set<string>();
+    for (let entry of await listPublicCollectionsFromKv(this.env, this.domain)) {
+      if (entry.orgId && isCollectionVisibleToOrg(entry, this.orgId, true)) orgs.add(entry.orgId);
+    }
+    if (this.orgId) orgs.add(this.orgId);
+    return [...orgs].toSorted((left, right) => left.localeCompare(right));
   }
 
   // --- Collection management ---
@@ -129,6 +185,7 @@ export class ContextApiImpl extends RpcTarget implements ContextApi {
     visibility: ContextCollectionVisibility,
     icon?: string,
     source: ContextCollectionContent["source"] = "web",
+    orgId?: string,
   ): Promise<ContextCollectionMetadata> {
     if (visibility === "public") this.#assertAdmin();
     if (source !== "web" && source !== "git") {
@@ -138,6 +195,23 @@ export class ContextApiImpl extends RpcTarget implements ContextApi {
       throw new Error("Git-backed Context collections are not enabled.");
     }
 
+    // The org tag, and the one place the OZL-291 policy is enforced: the admin names the target org
+    // at creation (option A) rather than the collection inheriting one implicitly.
+    //
+    // Required when separation is on, because an untagged public collection fails closed and would
+    // be invisible to everyone the moment it was created — a silent no-op that reads as a bug. The
+    // UI prefills the admin's own org, so this is a confirm rather than a recall for the common
+    // case; a deployment-wide collection has no representation here and must be created per org.
+    let tag: string | undefined;
+    if (visibility === "public" && isOrgSeparationEnabled(this.env)) {
+      tag = orgId?.trim();
+      if (!tag) {
+        throw new Error(
+            "This deployment separates orgs, so a public collection must name the org it belongs " +
+            "to. Untagged public collections are visible to no one.");
+      }
+    }
+
     let id = crypto.randomUUID();
     let metadata: ContextCollectionMetadata = {
       id,
@@ -145,6 +219,7 @@ export class ContextApiImpl extends RpcTarget implements ContextApi {
       title,
       description,
       visibility,
+      orgId: tag,
       created: new Date(),
       lastUpdated: new Date(),
       documentCount: 0,
@@ -258,7 +333,8 @@ export class ContextApiImpl extends RpcTarget implements ContextApi {
   // --- Listing & access ---
 
   async listEnabledContextCollections(): Promise<EnabledCollectionInfo[]> {
-    return loadEnabledContextCollections(this.env, this.domain, this.#userLib());
+    return loadEnabledContextCollections(
+        this.env, this.domain, this.#userLib(), this.orgId, isOrgSeparationEnabled(this.env));
   }
 
   async canWriteContextCollection(collectionId: string): Promise<boolean> {

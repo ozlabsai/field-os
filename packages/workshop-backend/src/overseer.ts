@@ -3366,7 +3366,8 @@ class OverseerImpl implements AgentHooks {
       using authorizer = new NativeRpcStub<ObservationAuthorizer>(
           new SlashCommandAuthorizerImpl(this, gatekeeperId, {from: "user"}));
       let result = await invokeSlashCommand(
-          this.getGatekeeperFacet(gatekeeperId), message, authorizer);
+          this.getGatekeeperFacet(gatekeeperId), message, authorizer,
+          {orgId: await this.ownerOrgId()});
       if (result.message === undefined) {
         return {slashCommand: message, skillName: result.skillName};
       }
@@ -4809,9 +4810,14 @@ class OverseerImpl implements AgentHooks {
             // The DurableObjectStub proxy unstubifies the RpcStub param to its target type; the
             // native stub forwards transparently at runtime.
             let facet = this.getGatekeeperFacet(gatekeeperId) as unknown as CatalogGatekeeperFacet;
+            // The catalog is a separate entrypoint from startSession and so needs its own
+            // SessionContext: without it a gatekeeper holding org-scoped data would scope what the
+            // agent can *read* while still listing cross-org titles here, and a title alone can be
+            // the disclosure. Same owner's-org rule as openSession.
             let catalog = await facet.getAgentCatalog(
                 {limit: AGENT_CATALOG_MAX_ENTRIES},
-                authorizer as unknown as ObservationAuthorizer);
+                authorizer as unknown as ObservationAuthorizer,
+                {orgId: await this.ownerOrgId()});
             return catalog ? normalizeAgentCatalog(catalog) : null;
           } catch (error) {
             reportIssue("overseer.catalog-fallback", error, {
@@ -4874,7 +4880,7 @@ class OverseerImpl implements AgentHooks {
       name: "compact",
       description: "Summarize older context while preserving recent messages.",
       providerLabel: resolveSiteName((await readAdminConfig(this.env)).siteName),
-    }, ...await collectSlashCommands(sources)];
+    }, ...await collectSlashCommands(sources, {orgId: await this.ownerOrgId()})];
   }
 
   // =======================================================================================

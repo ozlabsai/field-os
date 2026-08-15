@@ -28,6 +28,8 @@
 
 import { describe, expect, it } from "vitest";
 import { isCollectionVisibleToOrg } from "../src/org-scoping.js";
+import { metadataToSummary } from "../src/collection-kv.js";
+import type { ContextCollectionMetadata } from "../src/context-types.js";
 
 /** A public collection tagged with the org that authored it. */
 const tagged = (id: string, orgId: string) => ({ id, orgId });
@@ -73,5 +75,48 @@ describe("isCollectionVisibleToOrg", () => {
       expect(isCollectionVisibleToOrg(untagged("c2"), "legal", true)).toBe(false);
       expect(isCollectionVisibleToOrg(untagged("c2"), undefined, true)).toBe(false);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OZL-291: the tag must survive propagation.
+//
+// `#propagate()` (context-collection.ts) rebuilds the denormalized summary from metadata on EVERY
+// collection edit, via `metadataToSummary`. So a tag that lived only on the summary would be
+// silently erased the first time anyone renamed the collection or added a document -- and the
+// collection would then fail closed and vanish for everyone, long after the edit that caused it.
+//
+// That is why the tag's durable home is `ContextCollectionMetadata` and `metadataToSummary` copies
+// it through. This pins the copy: delete the `orgId` line from metadataToSummary and this fails,
+// while the predicate tests above all still pass.
+describe("metadataToSummary carries the org tag (OZL-291)", () => {
+  const metadata = (orgId: string | undefined): ContextCollectionMetadata => ({
+    id: "c1",
+    title: "Pending Litigation",
+    description: "",
+    visibility: "public",
+    orgId,
+    created: new Date(0),
+    lastUpdated: new Date(0),
+    documentCount: 0,
+    content: { source: "web" },
+  });
+
+  it("preserves the tag, so a later edit cannot untag the collection", () => {
+    expect(metadataToSummary(metadata("legal")).orgId).toBe("legal");
+  });
+
+  it("keeps the round trip visible to its own org and hidden from others", () => {
+    // The end-to-end property, one step removed from the predicate: what creation writes is what
+    // the read paths filter on.
+    const summary = metadataToSummary(metadata("legal"));
+    expect(isCollectionVisibleToOrg(summary, "legal", true)).toBe(true);
+    expect(isCollectionVisibleToOrg(summary, "engineering", true)).toBe(false);
+  });
+
+  it("leaves an untagged collection untagged (and so fails closed)", () => {
+    expect(metadataToSummary(metadata(undefined)).orgId).toBeUndefined();
+    expect(isCollectionVisibleToOrg(metadataToSummary(metadata(undefined)), "legal", true))
+        .toBe(false);
   });
 });
