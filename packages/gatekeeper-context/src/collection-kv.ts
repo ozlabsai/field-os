@@ -38,6 +38,9 @@ export function metadataToSummary(metadata: ContextCollectionMetadata): ContextC
     description: metadata.description,
     icon: metadata.icon,
     visibility: metadata.visibility,
+    // Carried through so the tag survives `#propagate()`, which rebuilds the summary from metadata
+    // on every collection edit. Omitting it here would untag a collection on its next rename.
+    orgId: metadata.orgId,
     documentCount: metadata.documentCount,
     lastUpdated: metadata.lastUpdated,
   };

@@ -23,8 +23,12 @@ export type CollectionOrgTag = {
   /**
    * The org that authored this collection, or undefined for one created before org separation
    * existed. Undefined is NOT "visible to everyone" once separation is on -- see below.
+   *
+   * Optional rather than required-but-undefined so a `ContextCollectionSummary` can be passed
+   * directly. The rule treats "absent" and "explicitly undefined" identically -- both fail closed
+   * -- so the distinction would buy nothing and cost every caller a destructuring step.
    */
-  orgId: string | undefined;
+  orgId?: string;
 };
 
 /**
