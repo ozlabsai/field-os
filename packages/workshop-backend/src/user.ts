@@ -1479,10 +1479,16 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   // Open the full-page management UI for an account that declares one. `context.isAdmin` is supplied
   // fresh by the caller so admin-gated features reflect the user's current status.
+  //
+  // The org is filled in here rather than by the caller: this method already runs inside the user's
+  // own DO, so it is a storage read rather than the round-trip `getOrgId()` would cost at the call
+  // site. It is this user's org — the one opening the UI — unlike the ambient agent session, which
+  // carries the workspace *owner's* org (see `openSession` in overseer.ts).
   async startAccountAppUi(accountId: number, context: AppUiContext): Promise<GatekeeperUiFrame> {
     let record = this.storage.connectedAccounts.get(accountId);
     if (!record?.description.providesUi) throw new Error("No such app.");
-    return (record.account as unknown as SingletonAccountStub).startAppUi(context);
+    return (record.account as unknown as SingletonAccountStub).startAppUi(
+        { ...context, orgId: this.storage.orgId.get() ?? undefined });
   }
 
   async ensureAccountResources(accountId: number, resourceUrlPatterns: string[]): Promise<{url?: string}> {

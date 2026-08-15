@@ -79,6 +79,17 @@ export type VendorDescription = {
 // each time rather than baked into the account, since a user's admin status can change over time.
 export type AppUiContext = {
   isAdmin: boolean;
+
+  /**
+   * The org the user opening the UI currently belongs to, or undefined when the deployment does
+   * not separate orgs or resolves none for them.
+   *
+   * Supplied per open for the same reason as `isAdmin`, and never read from the gatekeeper's props
+   * for the reason {@link SessionContext} gives: props are fixed at provisioning and go stale
+   * permanently. A gatekeeper that stores org-scoped data uses this to tag what the user creates
+   * and to scope what it shows them.
+   */
+  orgId?: string;
 }
 
 /**
@@ -672,6 +683,7 @@ export interface Gatekeeper<Session> extends DurableObject {
   getAgentCatalog?(
     request: AgentCatalogRequest,
     authorizer: RpcStub<ObservationAuthorizer>,
+    context?: SessionContext,
   ): Promise<AgentCatalog | null>;
 
   // Informs the gatekeeper that a new user is being added to the Gadget with the potential to see
@@ -715,7 +727,12 @@ export interface Gatekeeper<Session> extends DurableObject {
   removeObserver(id: string): Promise<void>;
 
   // Returns the provider for describe().hasSlashCommands, if supported.
-  getSlashCommandProvider?(): Promise<SlashCommandProvider>;
+  //
+  // Takes a SessionContext for the same reason getAgentCatalog does: the provider's `list()` is a
+  // discovery surface, so a gatekeeper holding org-scoped data must be able to scope the command
+  // names it offers. Supplied when the provider is minted rather than per call, since the whole
+  // provider belongs to one caller's session.
+  getSlashCommandProvider?(context?: SessionContext): Promise<SlashCommandProvider>;
 
   // ---------------------------------------------------------------------------
   // Callbacks invoked by the overseer to apply (or reject) actions that were previously queued
