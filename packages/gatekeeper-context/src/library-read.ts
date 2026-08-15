@@ -4,6 +4,7 @@
 import { RpcStub as NativeRpcStub } from "cloudflare:workers";
 import { RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
+import { isCollectionVisibleToOrg } from "./org-scoping.js";
 import type {
   ObservationAuthorizer, ObservationDescription,
 } from "@gadgets/workshop-shared/gatekeeper";
@@ -42,6 +43,11 @@ export class LibraryReadSession extends RpcTarget {
     private accountId: string,
     private authorizer: NativeRpcStub<ObservationAuthorizer>,
     private observeCollections: ObserveCollections,
+    // The session owner's org and whether the boundary is enforced, supplied per session by the
+    // Workshop (see SessionContext). Undefined org with enforcement on means this session sees no
+    // org-tagged public collection -- "unknown" must not read as "permitted".
+    private readerOrg: string | undefined = undefined,
+    private orgSeparationEnabled: boolean = false,
   ) {
     super();
   }
@@ -60,8 +66,33 @@ export class LibraryReadSession extends RpcTarget {
   }
 
   // Computed once per session; search/list/read share it.
+  //
+  // The org filter lands HERE, on the enabled set, rather than on each of search/list/read. That
+  // is deliberate: this map is the single thing every read path gates on, so filtering it scopes
+  // content and titles together and keeps a future fourth consumer correct without its own check.
+  // Guarding the individual methods instead would have left `getAgentCatalog` leaking titles.
   #enabled(): Promise<Map<string, ContextCollectionVisibility>> {
-    return (this.#enabledPromise ??= this.#userLib().getEnabledCollections(this.domain));
+    return (this.#enabledPromise ??= this.#loadEnabled());
+  }
+
+  async #loadEnabled(): Promise<Map<string, ContextCollectionVisibility>> {
+    let enabled = await this.#userLib().getEnabledCollections(this.domain);
+    if (!this.orgSeparationEnabled) return enabled;
+
+    // Private collections are per-account and never shared, so they are never org-filtered; only
+    // the public ones carry an org tag.
+    let tags = await this.#userLib().getPublicCollectionOrgTags(this.domain);
+    // Deleting the CURRENT key during `for...of` over a Map is well-defined and visits every
+    // remaining entry. Keep it that way: deleting some other key mid-iteration is not, and this is
+    // the filter the whole boundary rests on.
+    for (let [id, visibility] of enabled) {
+      if (visibility !== "public") continue;
+      if (!isCollectionVisibleToOrg(
+          { id, orgId: tags.get(id) }, this.readerOrg, this.orgSeparationEnabled)) {
+        enabled.delete(id);
+      }
+    }
+    return enabled;
   }
 
   async #authorize(

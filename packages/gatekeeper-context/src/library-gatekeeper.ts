@@ -11,10 +11,11 @@ import type {
   AppUiContext, GatekeeperUser, GatekeeperUiFrame, ApprovalQueue, ObservationAuthorizer,
   GatekeeperConnectCallback, GatekeeperConnectOptions, SupportedResource,
   Gatekeeper, GatekeeperUserVerifier, ResourceDescription, ActionKind,
-  SlashCommandDescriptor, SlashCommandProvider, SlashCommandResult,
+  SlashCommandDescriptor, SlashCommandProvider, SlashCommandResult, SessionContext,
 } from "@gadgets/workshop-shared/gatekeeper";
 import { LibraryReadSession } from "./library-read.js";
 import { ContextApiImpl, loadEnabledContextCollections } from "./context-api.js";
+import { isOrgSeparationEnabled } from "./org-scoping.js";
 import { ContextObserverTracker } from "./context-observers.js";
 import type { ContextVerifierApi } from "./context-observers.js";
 import {
@@ -267,22 +268,25 @@ export class ContextGatekeeper
     return CONTEXT_LIBRARY_TYPES;
   }
 
-  #newReadSession(authorizer: NativeRpcStub<ObservationAuthorizer>): LibraryReadSession {
+  #newReadSession(authorizer: NativeRpcStub<ObservationAuthorizer>,
+                  context?: SessionContext): LibraryReadSession {
     // The read session uses this authorizer after startSession() returns, so it owns a duplicate.
     let ownedAuthorizer = authorizer.dup();
     try {
       return new LibraryReadSession(
         this.#collections(), this.#userLibraries(),
         this.ctx.props.sharingDomain, this.ctx.props.accountId, ownedAuthorizer,
-        collectionIds => this.#observers().prepareObservation(collectionIds));
+        collectionIds => this.#observers().prepareObservation(collectionIds),
+        context?.orgId, isOrgSeparationEnabled(this.env));
     } catch (err) {
       ownedAuthorizer[Symbol.dispose]?.();
       throw err;
     }
   }
 
-  async startSession(approvalQueue: NativeRpcStub<ApprovalQueue>): Promise<LibraryReadSession> {
-    return this.#newReadSession(approvalQueue);
+  async startSession(approvalQueue: NativeRpcStub<ApprovalQueue>,
+                     context?: SessionContext): Promise<LibraryReadSession> {
+    return this.#newReadSession(approvalQueue, context);
   }
 
   async getSlashCommandProvider():

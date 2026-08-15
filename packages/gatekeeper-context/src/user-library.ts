@@ -79,6 +79,21 @@ export class UserLibraryDurableObject extends DurableObject<Cloudflare.Env> {
 
   // Enabled collection visibility for the agent read path. Owned wins on overlap so private is never
   // downgraded to public.
+  /**
+   * Org tag per public collection in this domain, for session-scoped filtering (OZL-217).
+   *
+   * Separate from `getEnabledCollections` rather than folded into it: the enabled set is on the
+   * hot path for every read, and a deployment not separating orgs must not pay for a lookup it
+   * will not use. Only public collections carry a tag; private ones are per-account already.
+   */
+  async getPublicCollectionOrgTags(domain: string): Promise<Map<string, string | undefined>> {
+    let tags = new Map<string, string | undefined>();
+    for (let entry of await listPublicCollectionsFromKv(this.env, domain)) {
+      tags.set(entry.id, entry.orgId);
+    }
+    return tags;
+  }
+
   async getEnabledCollections(domain: string): Promise<Map<string, ContextCollectionVisibility>> {
     let result = new Map<string, ContextCollectionVisibility>();
     for (let record of this.storage.ownedCollections.list()) result.set(record.id, "private");

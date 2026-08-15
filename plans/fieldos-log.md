@@ -1114,3 +1114,87 @@ would force every integration test to boot a loader for no benefit.
    plus the **gatekeeper facets the ticket never mentions** (`:2509`, `:2623`).
 
 None of these is a storage-format problem, which is what the spike was gated on.
+
+## 2026-08-15 — Org separation Phases 2 and 3
+
+Phase 2 shipped (OZL-216, PR #68). Phase 3's read half is on
+`feat/ozl-217-context-org-scoping`; its UI and write halves are not done, and the handoff records
+what remains.
+
+Both phases had the same shape as OZL-219 and OZL-239 before them: the ticket named a chokepoint,
+and the chokepoint was not where enforcement had to go.
+
+### Phase 2 — the ticket's scope left a complete bypass
+
+It scopes enforcement to `Overseer.open()`'s non-owner branch, and the design doc states "no
+bypass exists: every path that mints an Overseer stub funnels here."
+
+`receiveExternalMessage()` never calls `open()`. It carries its own hand-rolled non-owner
+authorization — a duplicate of `prohibitAllSharing` + `getEffectiveRole` — is reachable from
+`external-message-gateway.ts`, and past that gate it reads chat history and drives the agent.
+Enforcing only in `open()` would have left an external gateway as full workspace read/write for a
+wrong-org collaborator. The design doc cites this function as the second workspace-*creation* path
+but never reconciles that with its own bypass claim.
+
+One shared method now serves both. It returns a decision rather than throwing, because the two
+paths fail in different idioms — `open()` throws a coded error, `receiveExternalMessage` returns
+`{accepted: false, message}`.
+
+**Two further departures.** Both flags went to env vars rather than `AdminConfig`, because
+`admin-config.ts`'s own header forbids exactly that — authz config "stays env-var driven so it
+can't be changed by a compromised admin session", and `AdminConfig` is writable by any live admin
+session. And an org denial got its **own error code**: reusing `workspaceAccessDenied` triggers
+`forgetSharedGadget`, a hard delete of the caller's listing and outputs index with no restore.
+That would have made `ENABLE_ORG_SEPARATION` a one-way door — flipping it back off could not have
+returned those users their workspaces — silently violating the ticket's own Done-when.
+
+**A false negative that nearly caused a redesign.** The distinct-code design depends on the error
+`code` surviving two hops with different serializations. A synthetic probe reported that custom
+error properties are stripped, which would have killed it. Driving a real denial through the tier-2
+stack showed `code` arrives intact at both hops. The probe had set `enhanced_error_serialization`
+on only one of two workers — an asymmetry that cannot occur here, since `server.ts` re-exports
+`OverseerDurableObject` and both are literally the same worker.
+
+Worth recording as the mirror of this repo's usual trap. The documented failure mode is a test that
+*passes* without exercising its subject. This was the inverse: a test that **failed for a reason
+that cannot exist in production**. A fixture that does not mirror real deployment topology produces
+confident false negatives just as easily as false positives.
+
+### Phase 3 — the same mistake, one layer down
+
+OZL-217 names `#assertCanRead` and `hasCollectionAccess`. Both are secondary. The agent read path
+touches neither — `grep` for either in `library-read.ts` returns nothing, and `hasCollectionAccess`
+has exactly two callers, both in the observer path.
+
+The agent reads content through `LibraryReadSession`, gating on
+`UserLibraryDurableObject.getEnabledCollections` — whose own comment calls it "the agent read
+path" — and reads titles through `getAgentCatalog`. Both compute the same union: owned collections
+plus every entry in the domain's public KV snapshot, unconditionally.
+
+Implementing the ticket literally would have hidden cross-org collections in the management UI
+while leaving the agent able to search, list and read them every turn. An admin browsing the
+library would have seen correct scoping. That is the most dangerous shape a security fix can take.
+
+The filter therefore lands on the **enabled set**, not on the guards — one place gating content and
+titles together, so a future consumer inherits the scoping instead of needing its own check.
+
+**Why the org rides `SessionContext` and not props.** An existing account is never re-provisioned
+(`#provisionMissingAccounts` only creates accounts for vendors lacking one) and
+`ensureAmbientCapsules` skips any record whose `accountId` matches, so
+`getSingletonGatekeeperClass` is never re-called. A value stored in props would go stale
+**permanently and silently** — a user who moved org would keep reading their old org's collections
+forever, with no repair path. An earlier framing of this as "sign-in-bounded staleness" was wrong;
+tracing where the org could actually enter is what corrected it.
+
+**Untagged fails closed**, departing from the ticket. "Untagged means all-orgs" would collapse the
+exact distinction Phase 2 paid to keep with `orgUnknown` — created-before-the-boundary versus
+tag-never-written — permanently, for the resource most likely to carry a sensitive name, since a
+collection title alone can be the disclosure.
+
+### Left undone, deliberately
+
+The Phase 3 UI and write paths, and the admin-org decision that gates tagging. Recorded in the
+handoff rather than guessed at: admins are deployment-wide and flat and need not belong to any org,
+so "which org tags an admin-created public collection" is a policy question, not an implementation
+detail. With the flag on and nothing writing `orgId`, every public collection currently fails
+closed — safe, and unusable until tagging exists.

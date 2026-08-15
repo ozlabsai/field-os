@@ -81,6 +81,26 @@ export type AppUiContext = {
   isAdmin: boolean;
 }
 
+/**
+ * Trusted facts about the caller, supplied by the Workshop when it starts a session.
+ *
+ * Passed per call rather than baked into the gatekeeper's props, and that distinction is the whole
+ * point: props are fixed when an account is provisioned and never refresh (an existing account is
+ * never re-provisioned), so anything stored there goes stale silently and permanently. A fact that
+ * can change during an account's life has to arrive with the call that uses it.
+ *
+ * Only the Workshop can vouch for these. A gatekeeper consumes them and must never assert them for
+ * itself — the same rule that keeps a gatekeeper from declaring its own ambience.
+ */
+export type SessionContext = {
+  /**
+   * The org the session's owner currently belongs to, or undefined when the deployment does not
+   * separate orgs or resolves no org for them. A gatekeeper holding org-scoped data filters on it;
+   * one that holds none ignores it.
+   */
+  orgId?: string;
+}
+
 // The agent catalog is bounded discovery metadata a gatekeeper exposes via
 // Gatekeeper.getAgentCatalog() so the agent can see *what* is reachable through a session (e.g. the
 // titles of the Context Library collections it can search) without first reading everything. It is
@@ -641,7 +661,7 @@ export interface Gatekeeper<Session> extends DurableObject {
   // dependent actions. That said, there is no strict requirement that a gatekeeper does such
   // simulation -- it is really up to the gatekeeper author to decide what is appropriate for the
   // particular API.
-  startSession(approvalQueue: RpcStub<ApprovalQueue>): Promise<Session>;
+  startSession(approvalQueue: RpcStub<ApprovalQueue>, context?: SessionContext): Promise<Session>;
 
   // Bounded, user-specific metadata the agent uses to discover entries reachable through this
   // gatekeeper's session, without paging the full session API. Implemented only by gatekeepers

@@ -100,6 +100,16 @@ permission graph, and the access decision still happens in `open()`. A cross-org
 there. `sharing.ts` never learns orgs exist — correct layering, so do not touch it.
 
 **Chokepoint 2 — Context Library public collections.**
+
+> **Corrected during Phase 3 implementation.** The two call sites named below are **secondary**.
+> The agent read path touches neither: `#assertCanRead` guards only the management UI, and
+> `hasCollectionAccess` has exactly two callers, both in the observer path. The agent reads through
+> `LibraryReadSession`, gating on `UserLibraryDurableObject.getEnabledCollections`, and reads titles
+> through `getAgentCatalog` via `loadEnabledContextCollections`. Both compute the same owned ∪
+> public union, which is where the filter belongs — one place scopes content and titles together.
+> Filtering only the sites named below would hide cross-org collections in the UI while leaving the
+> agent reading them every turn. See the 2026-08-15 log entry.
+
 `#assertCanRead` (`context-api.ts`) grants on `isPublic` with no org dimension, and this path
 **never passes through `open()`**. Under org separation a Legal-authored public collection would be
 readable by Engineering. Public collections get an `orgId` tag; the registry listing and
@@ -113,8 +123,12 @@ account-scoped `ScheduleDriver`, with no cross-identity RPC, and inherit the wor
 
 ## Where membership is stored
 
-`orgId` on `UserDurableObject`, written at sign-in from the claim, mirrored to KV exactly as
-`AdminSettings` mirrors `.adminConfig`, so the hot path is one cheap KV get.
+`orgId` on `UserDurableObject`, written at sign-in from the claim.
+
+> **The KV mirror described here was dropped during Phase 1** and never built — see the Phases
+> section below. Org membership is per-user and `open()` already holds the user namespace, so a
+> mirror would have added a second storage system and a staleness window to save a round-trip that
+> may not exist. Phase 2 reads `getOrgId()` live.
 
 Rejected: a separate `OrgDurableObject` (a second DO round-trip on the hottest path, to answer a
 question that is a property of the user alone), and carrying the org in the session (session tokens
