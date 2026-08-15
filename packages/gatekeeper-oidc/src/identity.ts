@@ -151,13 +151,27 @@ export async function verifyIdToken(
   config: OidcConfig,
   endpoints: OidcEndpoints,
   org?: OrgClaimConfig,
+  onOverage?: (claim: string) => void,
 ): Promise<OidcIdentity> {
   let { payload } = await jwtVerify(idToken, jwkSetFor(endpoints.jwks), {
     issuer: config.issuer.replace(/\/$/, ""),
     audience: config.clientId,
   });
 
-  return identityFromClaims(payload, org);
+  return identityFromClaims(payload, org, onOverage);
+}
+
+/**
+ * Whether the IdP replaced this claim with a pointer to an external directory.
+ *
+ * Entra signals its group overage by omitting the claim and listing it in `_claim_names`, with the
+ * retrieval endpoint in `_claim_sources` (RFC 7515 aggregated/distributed claims). Both are checked
+ * so a token merely *carrying* distributed claims for something else is not mistaken for one.
+ */
+function isClaimOverage(payload: JWTPayload, claim: string): boolean {
+  let names = payload._claim_names;
+  if (!names || typeof names !== "object" || !(claim in names)) return false;
+  return payload[claim] === undefined;
 }
 
 /**
@@ -176,8 +190,26 @@ export async function verifyIdToken(
  * Multiple matching groups are also treated as unresolvable: picking the first would make access
  * depend on the order an IdP happened to serialize a claim.
  */
-export function resolveOrg(payload: JWTPayload, config: OrgClaimConfig): string | undefined {
+export function resolveOrg(
+    payload: JWTPayload, config: OrgClaimConfig,
+    onOverage?: (claim: string) => void): string | undefined {
   if (!config.claim) return undefined;
+
+  // Entra's group overage. Above 200 groups (JWT) it omits the claim ENTIRELY and substitutes
+  // `_claim_names`/`_claim_sources` pointing at Microsoft Graph -- an internet endpoint an
+  // airgapped deployment cannot reach. Without this branch such a user is byte-identical to one in
+  // no groups at all, so a tenant-wide misconfiguration would present as an ordinary permissions
+  // complaint from a handful of users. Detected, not resolved: there is nothing to fetch here, and
+  // the fix is to reconfigure the IdP to emit only application-assigned groups.
+  // Deliberately NOT a thrown error, even though it is a misconfiguration: `resolveOrg` runs
+  // inside `verifyIdToken` on the sign-in path, so throwing would refuse the login outright and
+  // turn a claim misconfiguration into an outage -- exactly what `#resolveOrg` in the Workshop's
+  // login-flow.ts declines to do. The user resolves to no org (reaching nothing org-scoped, which
+  // is recoverable and visible) and the deployment gets a distinct log line naming the cause.
+  if (isClaimOverage(payload, config.claim)) {
+    onOverage?.(config.claim);
+    return undefined;
+  }
 
   let raw = payload[config.claim];
   // Accept an array (the common shape) or a single string; anything else is not a group list.
@@ -185,14 +217,18 @@ export function resolveOrg(payload: JWTPayload, config: OrgClaimConfig): string 
   let names = groups.filter((g): g is string => typeof g === "string" && g.length > 0);
   if (names.length === 0) return undefined;
 
+  // Keycloak emits group *paths*, not names: its group-membership mapper defaults `full.path` to
+  // true, so a nested group arrives as `/eng/fieldos-legal` and a top-level one as
+  // `/fieldos-legal`. Match on the LAST segment rather than stripping only the leading slash --
+  // otherwise every user in a nested group silently resolves to no org under Keycloak's default
+  // configuration, which is indistinguishable from a user who genuinely has none.
+  let leaves = names.map(n => n.slice(n.lastIndexOf("/") + 1)).filter(n => n.length > 0);
+
   let matched = config.prefix
-      // Keycloak emits group *paths* like `/fieldos-legal`, so tolerate a leading slash rather
-      // than making every Keycloak deployment configure the prefix with one.
-      ? names.map(n => n.replace(/^\//, ""))
-             .filter(n => n.startsWith(config.prefix!))
-             .map(n => n.slice(config.prefix!.length))
-             .filter(n => n.length > 0)
-      : names.map(n => n.replace(/^\//, ""));
+      ? leaves.filter(n => n.startsWith(config.prefix!))
+              .map(n => n.slice(config.prefix!.length))
+              .filter(n => n.length > 0)
+      : leaves;
 
   // Deduplicate before deciding: an IdP repeating the same group is not an ambiguity.
   let unique = [...new Set(matched.map(n => n.toLowerCase()))];
@@ -205,7 +241,9 @@ export function resolveOrg(payload: JWTPayload, config: OrgClaimConfig): string 
  * Split from `verifyIdToken` so the claim rules can be tested without standing up a signer; do not
  * call it with unverified claims.
  */
-export function identityFromClaims(payload: JWTPayload, org?: OrgClaimConfig): OidcIdentity {
+export function identityFromClaims(
+    payload: JWTPayload, org?: OrgClaimConfig,
+    onOverage?: (claim: string) => void): OidcIdentity {
   let email = payload.email;
   if (typeof email !== "string" || !email.includes("@")) {
     throw new Error(
@@ -230,6 +268,6 @@ export function identityFromClaims(payload: JWTPayload, org?: OrgClaimConfig): O
     email: email.toLowerCase(),
     subject: payload.sub,
     expiresAt: typeof payload.exp === "number" ? new Date(payload.exp * 1000) : undefined,
-    orgId: org ? resolveOrg(payload, org) : undefined,
+    orgId: org ? resolveOrg(payload, org, onOverage) : undefined,
   };
 }

@@ -333,7 +333,14 @@ export class UserAccount extends DurableObject<Env> {
       code, endpoints, config, redirectUri: redirectUri(this.env),
     });
 
-    const identity = await verifyIdToken(idToken, config, endpoints, getOrgConfig(this.env));
+    const identity = await verifyIdToken(
+        idToken, config, endpoints, getOrgConfig(this.env),
+        // A group overage is a deployment misconfiguration, not a user error, and it is otherwise
+        // invisible: the user simply reaches nothing org-scoped. Logged at error level because it
+        // needs an admin to fix the IdP -- sign-in itself still succeeds.
+        claim => logger.error("identity provider returned a group overage", {
+          event: "oidc.org.claim.overage", claim,
+        }));
 
     // The provider must echo back the nonce we sent, binding this ID token to this request.
     // Checked after signature verification, so the claim is trustworthy by the time we read it.

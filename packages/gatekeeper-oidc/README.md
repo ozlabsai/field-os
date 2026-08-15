@@ -19,8 +19,13 @@ address the Workshop can trust.
 | `OIDC_GROUPS_CLAIM` | no | Claim to read group membership from, for org separation. Unset means this deployment does not use org separation. |
 | `OIDC_ORG_PREFIX` | no | Optional prefix marking which groups are orgs, e.g. `fieldos-` so `fieldos-legal` yields org `legal`. |
 
-Issuer examples: Keycloak `https://host/realms/{realm}`, Okta `https://org.okta.com`,
-Authentik `https://host/application/o/{slug}`, ADFS `https://host/adfs`.
+Issuer examples: Keycloak `https://host/realms/{realm}`, Okta `https://org.okta.com` (or
+`https://org.okta.com/oauth2/{authServerId}` for a custom authorization server), Entra
+`https://login.microsoftonline.com/{tenant}/v2.0`, Authentik `https://host/application/o/{slug}`,
+ADFS `https://host/adfs`.
+
+**Okta needs `OIDC_SCOPES=groups`** if you use org separation: Okta only emits the groups claim when
+the scope is requested.
 
 Register the redirect URI as `{PUBLIC_BASE_URL}/gatekeeper/oidc/callback`, exactly.
 
@@ -40,9 +45,19 @@ document. Its declared `issuer` must match what is configured, and every endpoin
 must share that origin and use HTTPS.
 
 **If using `OIDC_GROUPS_CLAIM` for org separation**, the provider must be configured to actually
-emit that claim (it's rarely on by default — see per-provider notes) and, for Microsoft Entra,
-to emit only application-assigned groups rather than the user's full group list. See
-[org resolution in `docs/configuration.md`](../../docs/configuration.md#org-resolution) for the
+emit that claim — it is off by default in every provider here — and the claim must reach the **ID
+token** specifically, since this connector verifies the ID token and never calls the userinfo
+endpoint. Three provider-specific traps, each of which otherwise fails silently to "no org":
+
+- **Keycloak** emits group *paths* (`/eng/fieldos-legal`), not names. Matching is on the last
+  segment, so nesting is handled; but check the mapper's ID-token checkbox.
+- **Okta** requires `groups` in `OIDC_SCOPES` as well as a configured claim.
+- **Entra** emits group **GUIDs** by default, which no prefix can match. Use App Roles (point
+  `OIDC_GROUPS_CLAIM` at `roles`) unless the groups are AD-synced. Entra also drops the claim
+  entirely above 200 groups; that case is logged as `oidc.org.claim.overage` rather than passing
+  silently, and sign-in still succeeds.
+
+See [org resolution in `docs/configuration.md`](../../docs/configuration.md#org-resolution) for the
 full reasoning and the Entra constraint.
 
 ## Design notes
