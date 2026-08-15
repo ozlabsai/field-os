@@ -77,6 +77,49 @@ server rejects, so the inference bug was invisible against it. The servers custo
 
 ## What to pick up next
 
+**IN FLIGHT: OZL-217, org separation Phase 3.** Branch `feat/ozl-217-context-org-scoping`,
+one commit (`3a3b21d`), `pnpm gate` exit 0. The **agent read path is scoped; the UI and write
+paths are not.** Two things remain, and the second is a blocker for enabling the flag:
+
+1. **The UI path is unscoped.** `loadEnabledContextCollections` (`context-api.ts:20`) still unions
+   in every public collection. It serves `ContextApiImpl` (the management iframe). The agent path
+   was fixed at a *different* union — `getEnabledCollections` (`user-library.ts`) — so this one is
+   genuinely separate work, not a missed call site. `#assertCanWrite` also has no org dimension.
+2. **Nothing writes `orgId`.** The field exists on `ContextCollectionSummary` and filters
+   correctly, but no code populates it. So with `ENABLE_ORG_SEPARATION=true` **every** public
+   collection currently fails closed and disappears. Safe, but unusable until tagging exists.
+
+An open decision gates (2): when a deployment **admin** creates a public collection, which org
+tags it? Admins are deployment-wide and flat by design (`ADMINS` env list) and need not belong to
+any org, so either the admin picks a target org at creation (needs UI) or admin-created
+collections are all-orgs by design (needs justification). Any implementation without this decision
+is guessing. See `plans/org-separation.md` and the OZL-217 ticket.
+
+**Three corrections to OZL-217's own text, all verified — do not re-derive:**
+- Its two named chokepoints (`#assertCanRead`, `hasCollectionAccess`) are both **secondary**. The
+  agent path touches neither: `grep` for either in `library-read.ts` returns nothing, and
+  `hasCollectionAccess` has exactly two callers, both in `context-observers.ts`. Implementing the
+  ticket literally would scope the management UI while leaving the agent reading cross-org content
+  every turn — a fix that passes casual testing and is wrong where it counts.
+- **Do not bake the org into gatekeeper props.** An existing account is never re-provisioned
+  (`#provisionMissingAccounts` only creates accounts for vendors lacking one, `user.ts:1424`) and
+  `ensureAmbientCapsules` skips any record whose `accountId` matches (`overseer.ts:4392-4405`), so
+  `getSingletonGatekeeperClass` is never re-called. Props go stale **permanently**, not until next
+  sign-in. The org therefore rides `SessionContext` on `startSession`, fresh per session.
+- The ambient session is the **owner's**, not the caller's (`ensureAmbientCapsules` resolves
+  through `ownerDo`), so the org filtered on is the owner's. That is deliberate: the capability
+  being exercised is theirs.
+
+**Untagged fails closed**, departing from the ticket's "untagged means all-orgs" — that rule would
+collapse the same distinction Phase 2 paid to keep (`orgUnknown`), permanently, for the resource
+most likely to carry a sensitive name.
+
+**Nothing reacts to a user changing org.** `loginOrCreateViaGatekeeper` (`user.ts:498`) overwrites
+`orgId` unconditionally without comparing. Phase 2 is unaffected (it reads live) and Phase 3's
+`SessionContext` is unaffected (fresh per session), but any future org-dependent capability that
+caches would inherit this. Unticketed.
+
+
 **~~OZL-256~~ — done.** `pnpm test` was flaky under concurrency in two ways (a build failure
 naming `.wrangler/validate/src/server.ts`, and workerd failing to boot). One cause, confirmed by
 observation rather than inference: `capnweb-validate build --out .wrangler/validate` empties the
