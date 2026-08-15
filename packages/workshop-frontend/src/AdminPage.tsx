@@ -3,7 +3,7 @@ import { RpcStub } from 'capnweb'
 import { Switch, Textarea, Input, Button, Tabs, useKumoToastManager } from '@cloudflare/kumo'
 import { Hexagon, ShieldWarning, UserPlus } from '@phosphor-icons/react'
 import { useAuthenticatedApi } from './AuthContext'
-import { AdminApi, AdminFormat, AdminResourceVendor, AmbientGatekeeperMode, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR } from '@gadgets/workshop-shared/api'
+import { AdminApi, AdminFormat, AdminResourceVendor, AdminSessionBounds, AmbientGatekeeperMode, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR } from '@gadgets/workshop-shared/api'
 import { applyAccentColor, DEFAULT_ACCENT_COLOR } from './theme'
 import { cacheBustSiteLogoUrl, prepareSiteLogo } from './siteLogoUtils'
 import SiteLogo from './components/SiteLogo'
@@ -76,6 +76,14 @@ export default function AdminPage() {
   const [signupsEnabled, setSignupsEnabled] = useState(true)
   const [savingSignups, setSavingSignups] = useState(false)
 
+  // Session bounds: the admin's stored choice (drafts kept as strings so the field can be empty,
+  // which means "inherit the ceiling" rather than 0) plus the server-computed ceiling/effective
+  // values, which can't be derived client-side and are refreshed by re-reading settings after save.
+  const [savedSessionBounds, setSavedSessionBounds] = useState<AdminSessionBounds | null>(null)
+  const [lifetimeHoursDraft, setLifetimeHoursDraft] = useState('')
+  const [idleMinutesDraft, setIdleMinutesDraft] = useState('')
+  const [savingSessionBounds, setSavingSessionBounds] = useState(false)
+
   // Gatekeeper resource config, and the set of resource keys ("vendorId\u0000urlPattern") busy toggling.
   const [resourceVendors, setResourceVendors] = useState<AdminResourceVendor[]>([])
   const [resourceBusy, setResourceBusy] = useState<Set<string>>(new Set())
@@ -104,6 +112,9 @@ export default function AdminPage() {
     setSavedAccent(view.accentColor)
     setAccentDraft(view.accentColor)
     setFormats(view.formats)
+    setSavedSessionBounds(view.sessionBounds)
+    setLifetimeHoursDraft(view.sessionBounds.lifetimeHours?.toString() ?? '')
+    setIdleMinutesDraft(view.sessionBounds.idleMinutes?.toString() ?? '')
   }
 
   // Mint the admin capability once (the access check happens server-side) and load settings.
@@ -259,6 +270,47 @@ export default function AdminPage() {
       toasts.add({ title: message, variant: 'error' })
     } finally {
       setSavingBanner(false)
+    }
+  }
+
+  // Parse a bounds draft: '' means "inherit the ceiling" (undefined), anything else must be a
+  // positive number or the field is invalid (Save stays disabled rather than silently clamping).
+  const parseBoundsDraft = (draft: string): number | undefined | null => {
+    if (draft.trim() === '') return undefined
+    const n = Number(draft)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+
+  const lifetimeHoursValue = savedSessionBounds ? parseBoundsDraft(lifetimeHoursDraft) : null
+  const idleMinutesValue = savedSessionBounds ? parseBoundsDraft(idleMinutesDraft) : null
+  // Above-ceiling values are technically accepted by the server (it clamps on read), but letting
+  // the admin type one here would teach the opposite of the security model: env vars set a ceiling
+  // the admin can only tighten below, never raise. So the UI blocks it outright.
+  const sessionBoundsInvalid =
+    !savedSessionBounds ||
+    lifetimeHoursValue === null ||
+    idleMinutesValue === null ||
+    (lifetimeHoursValue !== undefined && lifetimeHoursValue > savedSessionBounds.ceilingLifetimeHours) ||
+    (idleMinutesValue !== undefined && idleMinutesValue > savedSessionBounds.ceilingIdleMinutes)
+  const sessionBoundsDirty =
+    !!savedSessionBounds &&
+    (lifetimeHoursValue !== (savedSessionBounds.lifetimeHours ?? undefined) ||
+      idleMinutesValue !== (savedSessionBounds.idleMinutes ?? undefined))
+
+  const handleSaveSessionBounds = async () => {
+    if (!admin || sessionBoundsInvalid) return
+    setSavingSessionBounds(true)
+    try {
+      await admin.api.setSessionBounds(lifetimeHoursValue ?? undefined, idleMinutesValue ?? undefined)
+      // Effective values are computed server-side (clamped against the ceiling at read time), so
+      // re-read settings rather than deriving them here.
+      applySettings(await admin.api.getSettings())
+      toasts.add({ title: 'Session bounds saved', variant: 'success' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save session bounds'
+      toasts.add({ title: message, variant: 'error' })
+    } finally {
+      setSavingSessionBounds(false)
     }
   }
 
@@ -434,6 +486,87 @@ export default function AdminPage() {
               disabled={savingSignups}
               onCheckedChange={handleSignupsToggle}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Session bounds. Two numbers, but three sources of truth: the ceiling is env-set and the
+          admin can only tighten below it (never raise it — that's the whole point of it living in
+          env rather than this panel), the stored draft is what the admin chose (or nothing, meaning
+          "inherit the ceiling"), and the effective value is that draft clamped against the ceiling
+          at read time server-side. We show the effective value as what's actually in force and the
+          ceiling as the reason a higher number won't be accepted, so the panel doesn't imply the
+          admin has more authority here than they do. */}
+      {activeTab === 'access' && savedSessionBounds && (
+        <div className="bg-kumo-elevated border border-kumo-line rounded-xl p-6">
+          <h2 className="text-lg font-semibold text-kumo-strong mb-1">Session bounds</h2>
+          <p className="text-sm text-kumo-subtle mb-5">
+            How long a session may last before re-authentication is required, and how long it may sit
+            idle. You can tighten these below the deployment ceiling; leave a field empty to use the
+            ceiling. Applies to sessions created after saving.
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-kumo-subtle mb-2">
+                Max lifetime (hours)
+              </label>
+              <Input
+                type="number"
+                min={1}
+                max={savedSessionBounds.ceilingLifetimeHours}
+                value={lifetimeHoursDraft}
+                onChange={(e) => setLifetimeHoursDraft(e.target.value)}
+                placeholder={savedSessionBounds.ceilingLifetimeHours.toString()}
+              />
+              <p className="text-xs text-kumo-subtle mt-1.5">
+                Ceiling: {savedSessionBounds.ceilingLifetimeHours} hours (set by
+                SESSION_MAX_LIFETIME_HOURS). Effective now: {savedSessionBounds.effectiveLifetimeHours} hours.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-kumo-subtle mb-2">
+                Max idle (minutes)
+              </label>
+              <Input
+                type="number"
+                min={1}
+                max={savedSessionBounds.ceilingIdleMinutes}
+                value={idleMinutesDraft}
+                onChange={(e) => setIdleMinutesDraft(e.target.value)}
+                placeholder={savedSessionBounds.ceilingIdleMinutes.toString()}
+              />
+              <p className="text-xs text-kumo-subtle mt-1.5">
+                Ceiling: {savedSessionBounds.ceilingIdleMinutes} minutes (set by
+                SESSION_MAX_IDLE_MINUTES). Effective now: {savedSessionBounds.effectiveIdleMinutes} minutes.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end mt-4 gap-2">
+            {sessionBoundsDirty && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setLifetimeHoursDraft(savedSessionBounds.lifetimeHours?.toString() ?? '')
+                  setIdleMinutesDraft(savedSessionBounds.idleMinutes?.toString() ?? '')
+                }}
+                disabled={savingSessionBounds}
+              >
+                Reset
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleSaveSessionBounds}
+              loading={savingSessionBounds}
+              disabled={!sessionBoundsDirty || sessionBoundsInvalid}
+            >
+              Save
+            </Button>
           </div>
         </div>
       )}
