@@ -73,18 +73,38 @@ emit only the groups assigned to the application** (via the app registration's g
 configuration), not the user's full group membership, or affected users will silently lose org
 access.
 
-Keycloak emits group membership as paths (a leading `/`, e.g. `/fieldos-legal`); the connector
-strips the leading slash before matching, so `OIDC_ORG_PREFIX` does not need to account for it.
+Keycloak emits group membership as **paths**, not names: its group-membership mapper defaults
+`full.path` to true, so a top-level group arrives as `/fieldos-legal` and a nested one as
+`/eng/fieldos-legal`. The connector matches on the **last path segment**, so `OIDC_ORG_PREFIX` never
+needs to account for the slash or for where a group sits in the hierarchy. One consequence worth
+knowing: the org is the leaf name, so `/eng/legal` and `/legal` are the same org.
 
 Where the groups claim comes from, per provider:
 
 - **Keycloak**: not included by default — add a "Group Membership" mapper to the client's client
-  scope, and use the path (with or without leading slash) as the group name.
-- **Okta**: add a Groups claim to the authorization server's claims, filtered to the groups you
-  want visible to this application.
+  scope. Check the mapper's **ID token** checkbox: mappers have independent per-token settings, and
+  one that populates only userinfo or the access token leaves this connector seeing no claim (it
+  reads the ID token and never calls userinfo).
+- **Okta**: not included by default, and it needs **two** things — add a Groups claim to the
+  authorization server (filtered to the groups this application should see), *and* add `groups` to
+  `OIDC_SCOPES`, since Okta gates the claim on the scope being requested. Okta emits group **names**
+  as an array of strings. On the org authorization server the claim can only go in the ID token; a
+  custom authorization server can put it in either.
 - **Authentik**: group names are available via a scope mapping that includes `groups` in the token.
-- **Entra**: configure the app registration's optional claims / group claims to emit only
-  application-assigned groups — see the hard requirement above.
+- **Entra**: **`OIDC_ORG_PREFIX` cannot work against a default Entra configuration.** By default the
+  `groups` claim carries group **object IDs (GUIDs)**, not names, so no prefix will ever match and
+  every user resolves to no org. The name formats (`sAMAccountName`, `NetbiosDomain\sAMAccountName`)
+  exist **only on groups synced from on-prem Active Directory** — a cloud-only tenant cannot emit a
+  group name in that claim at all. For Entra, prefer **App Roles**: point `OIDC_GROUPS_CLAIM` at
+  `roles` and give each role a value you control (e.g. `fieldos-legal`). App Roles are also exempt
+  from the overage limit below. Also emit only application-assigned groups — see the hard
+  requirement above.
+
+**Overage is detected, not silently ignored.** When Entra substitutes `_claim_names`/`_claim_sources`
+for the claim, the connector logs `oidc.org.claim.overage` at error level and the user resolves to
+no org. Sign-in still succeeds: org resolution runs during ID-token verification, so refusing the
+login would turn a claim misconfiguration into an outage. Search the logs for that event before
+concluding that a user's missing access is a permissions bug.
 
 ### Cloudflare Access
 
