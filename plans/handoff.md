@@ -77,23 +77,30 @@ server rejects, so the inference bug was invisible against it. The servers custo
 
 ## What to pick up next
 
-**IN FLIGHT: OZL-217, org separation Phase 3.** Branch `feat/ozl-217-context-org-scoping`,
-one commit (`3a3b21d`), `pnpm gate` exit 0. The **agent read path is scoped; the UI and write
-paths are not.** Two things remain, and the second is a blocker for enabling the flag:
+**IN FLIGHT: OZL-291, org separation Phase 3b.** Branch
+`guy/ozl-291-org-separation-phase-3b`, five commits, `pnpm gate` and `pnpm build` both exit 0.
+OZL-217 (the read half) is Done. This completes the **write** half, and the decision it was blocked
+on has been made: **the admin names the target org at creation** (option A).
 
-1. **The UI path is unscoped.** `loadEnabledContextCollections` (`context-api.ts:20`) still unions
-   in every public collection. It serves `ContextApiImpl` (the management iframe). The agent path
-   was fixed at a *different* union — `getEnabledCollections` (`user-library.ts`) — so this one is
-   genuinely separate work, not a missed call site. `#assertCanWrite` also has no org dimension.
-2. **Nothing writes `orgId`.** The field exists on `ContextCollectionSummary` and filters
-   correctly, but no code populates it. So with `ENABLE_ORG_SEPARATION=true` **every** public
-   collection currently fails closed and disappears. Safe, but unusable until tagging exists.
+Not a dropdown — there is nothing to enumerate. An org is whatever an IdP group claim yields after
+prefix-stripping, and the design deliberately builds no user directory, so the field is free text
+prefilled with the admin's own org, with orgs already in use offered as datalist suggestions. It is
+*required* when separation is on, because an untagged public collection is visible to nobody.
 
-An open decision gates (2): when a deployment **admin** creates a public collection, which org
-tags it? Admins are deployment-wide and flat by design (`ADMINS` env list) and need not belong to
-any org, so either the admin picks a target org at creation (needs UI) or admin-created
-collections are all-orgs by design (needs justification). Any implementation without this decision
-is guessing. See `plans/org-separation.md` and the OZL-217 ticket.
+Three things worth not re-deriving:
+
+1. **The tag's durable home is `ContextCollectionMetadata`, not the summary.** `#propagate()`
+   rebuilds the summary from metadata on every edit via `metadataToSummary`, so a summary-only tag
+   would be erased by the next rename — failing closed silently, long after the edit that caused
+   it. The test pins the copy: removing it fails the new cases while all five OZL-217 predicate
+   tests still pass.
+2. **Two discovery surfaces the ticket did not name were also leaking.** `getAgentCatalog` and
+   `getSlashCommandProvider` are separate entrypoints from `startSession` and received no
+   `SessionContext` at all, so the agent would have seen cross-org collection *titles* and skill
+   command names every turn while being unable to read them. Both now take one.
+3. **The org reaches the UI via `AppUiContext`**, filled in inside `startAccountAppUi` — which
+   already runs in the user's own DO, so it is a storage read rather than a round-trip. Unlike the
+   ambient session, that one is the *caller's* org, not the owner's.
 
 **Three corrections to OZL-217's own text, all verified — do not re-derive:**
 - Its two named chokepoints (`#assertCanRead`, `hasCollectionAccess`) are both **secondary**. The
@@ -165,13 +172,35 @@ bindings; and do not describe `isBlockedHost` as a security control.
 address derived from user input would fully defeat the allow-list. The probe is rerunnable; see
 the log entry.
 
-**What is actually left there** (none of it widens network reach): `gatekeeper-oidc` has no guard
-of any kind on a worker granted RFC1918 reach; `webFetch` has no host check by design and no
-redirect tests; and `constantTimeEqual` is forked into three implementations, two of which use
-`crypto.subtle.timingSafeEqual` with no fallback.
+**What is actually left there is now OZL-292** (none of it widens network reach). Re-verified on
+2026-08-16, with two corrections to what this file previously said: `constantTimeEqual` is forked
+**four** ways, not three (github, homeassistant, oidc, mcp-shared) — and the two without a fallback
+both run under workerd in production, so that item is a *testability* gap, not a runtime
+vulnerability. `gatekeeper-oidc` genuinely has no host guard, but what it fetches is derived from
+operator config and `requireUrl` already enforces https + same-origin, so it is absent defence in
+depth rather than a live SSRF. The `webFetch` redirect path has **zero** tests, which is the part
+worth fixing regardless of severity.
 
-**The one needing a decision, not code: OZL-222** — what IdP do customers actually run? It has been
-asked repeatedly and gates verification of the OIDC work.
+**OZL-222 — partly answered by building rather than asking.** Rather than wait for per-customer
+answers, the connector was made correct against the three most common providers as they actually
+ship (2026-08-16). Two real bugs, both of which failed *silently to "no org"* — indistinguishable
+from a user who legitimately has none:
+
+- **Keycloak's group mapper defaults `full.path` to true** (verified against the mapper source), so
+  nested groups arrive as `/eng/fieldos-legal`. Stripping only the leading slash failed the prefix
+  test, so every user in a nested group resolved to no org under Keycloak's *default* config.
+  Now matched on the last path segment.
+- **Entra's group overage** is now detected and logged (`oidc.org.claim.overage`) rather than
+  passing silently. Deliberately not thrown: `resolveOrg` runs inside `verifyIdToken`, so throwing
+  would refuse the login and turn a misconfiguration into an outage.
+
+Two constraints are configuration, not code, and are documented: **Okta gates the groups claim on
+the `groups` scope** (`OIDC_SCOPES=groups`), and **Entra emits group GUIDs by default** — no prefix
+can match, and the name formats exist only on AD-synced groups, so a cloud-only tenant must use App
+Roles.
+
+What remains of OZL-222 is *verification against a live IdP*. Tier 2 drives a stub, so nothing here
+proves a real Keycloak signs someone in — the same gap OZL-225 closed for inference.
 
 ## Traps that have already cost time
 
