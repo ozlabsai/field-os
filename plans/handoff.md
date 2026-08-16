@@ -255,6 +255,15 @@ Each of these looked like success while being wrong. That is what makes them wor
 - **`uniqueKey` values are permanent.** They become the on-disk directory name and there is no
   migration mechanism. `run-workerd.mjs` persists them in `.workerd/keys.json` — do not regenerate.
 - **`SIGTERM` is ignored by a wedged workerd.** Go straight to `SIGKILL`.
+- **An airgap check that greps `src/` is not an airgap check.** The gadget code editor loads Monaco
+  from **jsDelivr** and cannot work on an airgapped network (OZL-293, Urgent). The URL never appears
+  in our source — it arrives inside `@monaco-editor/loader`'s default config and is only visible
+  after bundling, so every source-level audit before this one missed it. Scan `dist/`, not `src/`:
+  `grep -ohE "https?://[a-zA-Z0-9._-]+" dist/assets/*.js | sort -u`. Verified the chunk actually
+  ships (referenced from the main bundle), that the loader injects a `<script>` tag, and that no
+  local Monaco chunk exists — a string in a bundle is not by itself a defect, so check all three.
+  Cleared while there: `example.com` is admin placeholder text, `react.dev`/`fb.me`/`w3.org` are
+  error-message and namespace strings, and the built CSS has no `@font-face` or external `url()`.
 - **A `pnpm gate` failure under load is usually a timeout, and it does not look like one.** Seen
   twice on 2026-08-16 at load average ~34: `backend-utils` "failed" after **978 seconds with
   `tests 0ms`** (it never ran a test — it hung), and three unrelated `workshop-frontend` files
