@@ -20,6 +20,28 @@ import { findDeployablePackages, readWranglerConfig } from "./release/manifest-l
 import { parseInternalHosts, resolveInternalHosts } from "./internal-hosts.mjs";
 import { withBuildLock } from "./build-lock.mjs";
 
+// Backend instance state a real deployment gets from the deploy service at PUT time. Forwarded
+// from the process environment so a local stack can exercise admin-gated and policy-gated paths;
+// unset means "as a fresh deployment", which is the default and what most runs want.
+const INSTANCE_VARS = [
+  "ADMINS",
+  "ENABLE_ORG_SEPARATION",
+  "ALLOW_CROSS_ORG_SHARING",
+  "SESSION_MAX_LIFETIME_HOURS",
+  "SESSION_MAX_IDLE_MINUTES",
+  "DISABLE_PASSWORD_AUTH",
+  "AUTH_GATEKEEPERS",
+];
+
+// Instance vars a GATEKEEPER reads from its own env as well as the backend. A gatekeeper is a
+// separate worker sharing no code with the backend, so `org-scoping.ts` reads ENABLE_ORG_SEPARATION
+// itself; docs/configuration.md states the operator sets one value and both must receive it.
+//
+// Forwarding it to only the backend would produce the worst possible test result: the backend
+// enforces the boundary while the Context gatekeeper does not, so a cross-org public collection
+// stays visible and the boundary *looks* like it works.
+const GATEKEEPER_INSTANCE_VARS = ["ENABLE_ORG_SEPARATION"];
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGES_DIR = join(ROOT, "packages");
 const FRONTEND_DIST = join(PACKAGES_DIR, "workshop-frontend", "dist");
@@ -383,10 +405,31 @@ for (const w of workers) {
   // PUBLIC_BASE_URL on the backend, per-gatekeeper BASE_URL under the shared origin.
   if (pkgName === "workshop-backend") {
     bindingLines.push(`      (name = "PUBLIC_BASE_URL", text = ${capnpString(publicBaseUrl)}),`);
+    // Instance state the deploy service injects at PUT time on a real deployment, and which no
+    // wrangler.jsonc carries (see manifest-lib.mjs). Without a way to set these locally, several
+    // controls are simply unreachable on the only stack we can run: `#isAdmin()` compares against
+    // ADMINS, so with it unset every user is a non-admin and the admin panel cannot be exercised
+    // at all -- which is why OZL-226's verification kept being deferred rather than done.
+    //
+    // Read from the process environment rather than a flag per variable, so a new instance var
+    // needs no change here. Values pass through verbatim; ADMINS is JSON (a string array), which
+    // the backend parses itself.
+    for (const name of INSTANCE_VARS) {
+      const value = process.env[name];
+      if (value !== undefined) {
+        bindingLines.push(`      (name = ${capnpString(name)}, text = ${capnpString(value)}),`);
+      }
+    }
   } else if (pkgName.startsWith("gatekeeper-")) {
     const shortName = pkgName.slice("gatekeeper-".length);
     bindingLines.push(
         `      (name = "BASE_URL", text = ${capnpString(`${publicBaseUrl}/gatekeeper/${shortName}`)}),`);
+    for (const name of GATEKEEPER_INSTANCE_VARS) {
+      const value = process.env[name];
+      if (value !== undefined) {
+        bindingLines.push(`      (name = ${capnpString(name)}, text = ${capnpString(value)}),`);
+      }
+    }
   }
 
   // Service bindings the package declares for itself, e.g. the router's WORKSHOP_BACKEND. These
