@@ -3,7 +3,11 @@
 // Kept separate from identity.ts (which verifies what the provider says) so the flow's own
 // anti-replay rules can be read and tested on their own.
 
+import { constantTimeEqual } from "@gadgets/backend-utils/constant-time";
 import { OidcConfig, OidcEndpoints, resolveScopes } from "./identity.js";
+
+// Re-exported: callers here have always imported it from this module.
+export { constantTimeEqual };
 
 const NONCE_BYTES = 32;
 
@@ -31,30 +35,6 @@ export function generateNonce(): string {
   // (including the Node the tests run under) do not. Same approach as mcp-shared/src/util.ts.
   return [...crypto.getRandomValues(new Uint8Array(NONCE_BYTES))]
       .map(byte => byte.toString(16).padStart(2, "0")).join("");
-}
-
-/**
- * Compares two nonces without leaking their contents through timing.
- *
- * `crypto.subtle.timingSafeEqual` is a workerd extension rather than standard WebCrypto, so it is
- * absent under a plain Node test runner. The fallback is a real constant-time comparison, not a
- * test stub: it accumulates the XOR of every byte and branches only on length, which is already
- * public. Production runs the workerd path.
- */
-export function constantTimeEqual(a: string, b: string): boolean {
-  const encoder = new TextEncoder();
-  const bufA = encoder.encode(a);
-  const bufB = encoder.encode(b);
-  if (bufA.byteLength !== bufB.byteLength) return false;
-
-  let subtle = crypto.subtle as SubtleCrypto & {
-    timingSafeEqual?: (a: ArrayBufferView, b: ArrayBufferView) => boolean;
-  };
-  if (subtle.timingSafeEqual) return subtle.timingSafeEqual(bufA, bufB);
-
-  let diff = 0;
-  for (let i = 0; i < bufA.byteLength; i++) diff |= bufA[i] ^ bufB[i];
-  return diff === 0;
 }
 
 /** Whether a stored nonce matches, is unexpired, and is at the expected stage. */
