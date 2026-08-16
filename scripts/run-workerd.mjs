@@ -11,7 +11,7 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import {
-  existsSync, mkdirSync, readFileSync, writeFileSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -536,6 +536,39 @@ const assetsWorker :Workerd.Worker = (
   // allowDotfiles stays at its default (false): assets.js's own header comment documents this as
   // load-bearing (verified against traversal probes), not an oversight to "fix".
   serviceEntries.push(`    (name = "dist", disk = (path = ${capnpString(FRONTEND_DIST)}, writable = false)),`);
+
+  // The frontend bakes its backend host in at BUILD time. `getBackendHost()` (main.tsx) falls back
+  // to `localhost:8787` -- the wrangler dev backend -- for ANY localhost origin unless
+  // VITE_BACKEND_HOST was set, but this stack serves the SPA and the API from the same origin on
+  // :8080. A dist/ built for `pnpm dev` therefore loads, renders, and then sits forever on "Can't
+  // reach the server", with the only evidence in the browser console. Nothing else here can catch
+  // it: the stack itself is healthy, and every RPC-level check connects to :8080 directly and
+  // passes. So warn from the artifact rather than trust it -- checked, not assumed.
+  warnIfFrontendBuiltForOtherHost();
+}
+
+// Reads the built bundle and warns when it will dial a host this stack does not serve. A warning,
+// not a fatal error: a deployment fronted by a reverse proxy may legitimately bake in another host,
+// and refusing to boot over a heuristic would be worse than the bug it guards.
+function warnIfFrontendBuiltForOtherHost() {
+  let assetsDir = join(FRONTEND_DIST, "assets");
+  if (!existsSync(assetsDir)) {
+    console.warn(`WARNING: no built frontend at ${FRONTEND_DIST}. Run \`pnpm build\` in ` +
+        `packages/workshop-frontend with VITE_BACKEND_HOST=localhost:${args.port}.`);
+    return;
+  }
+  let expected = `localhost:${args.port}`;
+  for (let file of readdirSync(assetsDir)) {
+    if (!file.startsWith("index-") || !file.endsWith(".js")) continue;
+    let source = readFileSync(join(assetsDir, file), "utf8");
+    if (!source.includes("localhost:8787")) continue;      // not the dev fallback build at all
+    if (source.includes(expected)) continue;               // VITE_BACKEND_HOST was set correctly
+    console.warn(
+        `WARNING: ${file} was built for the Vite dev backend (localhost:8787), but this stack ` +
+        `serves the API on ${expected}. The UI will load and then fail to connect.\n` +
+        `         Rebuild with: VITE_BACKEND_HOST=${expected} pnpm --filter workshop-frontend build`);
+    return;
+  }
 }
 
 // The DO storage directory. workerd fails at startup with `Directory named "do-disk" not found`
@@ -571,7 +604,17 @@ const ${constName(INTERCEPTOR_SERVICE)} :Workerd.Worker = (
 // that actually have such a dependency get it. Everything else is pinned to public-only, so a bug
 // or a compromised dependency in (say) the scheduler cannot reach RFC1918 space just because the
 // MCP connector legitimately must. See INTERNAL_REACH below for who is which.
-serviceEntries.push(`    (name = "internet-public", network = (allow = ["public"])),`);
+// `tlsOptions` is not optional in practice: without it workerd has no TLS context for outbound
+// connections and every https:// fetch fails with `expected tlsNetwork != nullptr; this HttpClient
+// doesn't support HTTPS` -- before any connection is attempted, so it does not look like a network
+// failure. It went unnoticed because every service verified on this stack so far (Ollama, the stub
+// inference server, on-prem MCP) speaks plain HTTP; a corporate HTTPS endpoint hits it at once.
+// `trustBrowserCas` uses the system CA bundle, which is what a deployment reaching a normally-
+// certificated internal service needs. It grants no additional reach: `allow` still governs that.
+const TLS_OPTIONS = `tlsOptions = (trustBrowserCas = true)`;
+
+serviceEntries.push(
+    `    (name = "internet-public", network = (allow = ["public"], ${TLS_OPTIONS})),`);
 
 // One service per worker that has internal reach, carrying only the addresses for the roles that
 // worker depends on. `--allow` still applies on top: it is the deployment-wide grant, and a role's
@@ -586,7 +629,7 @@ for (const [pkgName, roles] of INTERNAL_REACH) {
   validateAllow(allow, `FIELDOS_INTERNAL_HOSTS (${roles.join("/")})`);
   serviceEntries.push(
       `    (name = ${capnpString(outboundServiceName(pkgName))}, ` +
-      `network = (allow = [${allow.map(capnpString).join(", ")}])),`);
+      `network = (allow = [${allow.map(capnpString).join(", ")}], ${TLS_OPTIONS})),`);
 }
 
 // The socket below points `service = "router"`, which resolves to the "router" entry the worker

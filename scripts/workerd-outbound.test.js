@@ -48,9 +48,24 @@ function outboundByWorker() {
 describe("per-worker outbound reach", () => {
   const outbound = outboundByWorker();
 
+  // Matched up to the allow list's closing bracket rather than the closing paren: `network` also
+  // carries `tlsOptions` (OZL-295), and anchoring on the paren made these assertions fail the
+  // moment a second field was added. What is being asserted is the allow list, not the field order.
   it("emits a public-only service, and one per worker with internal reach", () => {
-    assert.match(capnp, /\(name = "internet-public", network = \(allow = \["public"\]\)\)/);
-    assert.match(capnp, /\(name = "net-workshop-backend", network = \(allow = \[[^\]]*\]\)\)/);
+    assert.match(capnp, /\(name = "internet-public", network = \(allow = \["public"\]/);
+    assert.match(capnp, /\(name = "net-workshop-backend", network = \(allow = \[[^\]]*\]/);
+  });
+
+  // Every network service must carry a TLS context. Without it workerd has no `tlsNetwork` and
+  // every https:// fetch fails before a connection is attempted -- which reads as a network
+  // refusal rather than a missing capability, so it is worth pinning rather than rediscovering.
+  it("gives every network service a TLS context", () => {
+    const services = [...capnp.matchAll(/\(name = "([\w-]+)", network = \(([^)]*\)[^)]*)\)/g)];
+    assert.ok(services.length >= 2, "expected at least the public service and one per-worker one");
+    for (const [, name, body] of services) {
+      assert.match(body, /tlsOptions = \(trustBrowserCas = true\)/,
+          `service ${name} must have a TLS context, or https:// fetches fail from it`);
+    }
   });
 
   // Each of these contacts a host the operator chose, which on an isolated network is internal by
@@ -72,8 +87,15 @@ describe("per-worker outbound reach", () => {
   // unrelated worker. Without this, declaring an inference server would also expose it to the MCP
   // connector, which is the pooling OZL-250 removed one layer up.
   it("keeps one role's addresses out of another role's service", () => {
-    const serviceAllow = (name) =>
-      new RegExp(`\\(name = "${name}", network = \\(allow = \\[([^\\]]*)\\]\\)\\)`).exec(capnp)?.[1];
+    // Stops at the allow list's closing bracket, not the service's closing paren, so an added
+    // field (tlsOptions) cannot make this silently return undefined. That failure mode is worse
+    // than a wrong answer: the `.includes()` below then throws a TypeError instead of asserting,
+    // so the role-separation property stops being checked while still looking like a red test.
+    const serviceAllow = (name) => {
+      const match = new RegExp(`\\(name = "${name}", network = \\(allow = \\[([^\\]]*)\\]`).exec(capnp);
+      assert.ok(match, `no network service named ${name} in the generated config`);
+      return match[1];
+    };
 
     const backend = serviceAllow("net-workshop-backend");
     const mcp = serviceAllow("net-gatekeeper-mcp");
