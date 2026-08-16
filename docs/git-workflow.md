@@ -110,7 +110,8 @@ More generally: re-check any outward-facing command after touching remotes.
 
 **Running the release build breaks the next `types:check`.** `build-release.mjs` and
 `run-workerd.mjs` regenerate each package's gitignored `.wrangler/validate/`, which then fails type
-checking until cleared: `rm -rf packages/*/.wrangler`. The errors point at generated files you did
+checking until cleared:
+`find packages -maxdepth 2 -name .wrangler -type d -exec rm -rf {} +`. The errors point at generated files you did
 not write, which makes this confusing the first time.
 
 **Workerd-only APIs break under the Node test runner.** `crypto.subtle.timingSafeEqual` and

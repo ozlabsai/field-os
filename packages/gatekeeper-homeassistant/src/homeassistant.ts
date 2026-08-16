@@ -77,6 +77,7 @@ import type {
   ServiceInfo,
 } from "./types";
 import TYPES_CODE from "./types.txt";
+import { constantTimeEqual } from "@gadgets/backend-utils/constant-time";
 
 // ---------------------------------------------------------------------------
 // Configuration & nonce helpers
@@ -94,14 +95,6 @@ function hexEncode(bytes: Uint8Array): string {
 
 function generateNonce(): string {
   return hexEncode(crypto.getRandomValues(new Uint8Array(NONCE_BYTES)));
-}
-
-function constantTimeEqual(a: string, b: string): boolean {
-  const encoder = new TextEncoder();
-  const bufA = encoder.encode(a);
-  const bufB = encoder.encode(b);
-  if (bufA.byteLength !== bufB.byteLength) return false;
-  return crypto.subtle.timingSafeEqual(bufA, bufB);
 }
 
 function getBaseUrl(env: Env): string {

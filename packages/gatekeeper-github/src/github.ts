@@ -75,6 +75,7 @@ import GITHUB_ISSUE_CONFIGURATOR_HTML from "./generated/github-issue-configurato
 import GITHUB_PULL_REQUEST_CONFIGURATOR_HTML from "./generated/github-pull-request-configurator-ui.txt";
 import GITHUB_REPO_CONFIGURATOR_HTML from "./generated/github-repo-configurator-ui.txt";
 import { obsContext } from "./observability.js";
+import { constantTimeEqual } from "@gadgets/backend-utils/constant-time";
 
 const VENDOR_ID = "github";
 
@@ -351,14 +352,6 @@ function hexEncode(bytes: Uint8Array): string {
 
 function generateNonce(): string {
   return hexEncode(crypto.getRandomValues(new Uint8Array(NONCE_BYTES)));
-}
-
-function constantTimeEqual(a: string, b: string): boolean {
-  const encoder = new TextEncoder();
-  const bufA = encoder.encode(a);
-  const bufB = encoder.encode(b);
-  if (bufA.byteLength !== bufB.byteLength) return false;
-  return crypto.subtle.timingSafeEqual(bufA, bufB);
 }
 
 function getBaseUrl(env: Env): string {

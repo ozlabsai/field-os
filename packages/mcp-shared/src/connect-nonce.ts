@@ -30,12 +30,5 @@ export function generateNonce(): string {
   return hexEncode(crypto.getRandomValues(new Uint8Array(NONCE_BYTES)));
 }
 
-// Compares two hex-encoded nonces without leaking how far the match got.
-//
-// The length check is not a leak: nonce length is fixed and public.
-export function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
+// Re-exported: callers here have always imported it from this module.
+export { constantTimeEqual } from "@gadgets/backend-utils/constant-time";

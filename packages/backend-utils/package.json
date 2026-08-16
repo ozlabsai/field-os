@@ -8,6 +8,10 @@
       "types": "./src/unreachable.ts",
       "import": "./src/unreachable.ts"
     },
+    "./constant-time": {
+      "types": "./src/constant-time.ts",
+      "import": "./src/constant-time.ts"
+    },
     "./logger": {
       "types": "./src/logger.ts",
       "import": "./src/logger.ts"

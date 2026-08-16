@@ -238,6 +238,9 @@ importers:
 
   packages/gatekeeper-homeassistant:
     dependencies:
+      '@gadgets/backend-utils':
+        specifier: workspace:*
+        version: link:../backend-utils
       '@gadgets/configurator-ui':
         specifier: workspace:*
         version: link:../configurator-ui
