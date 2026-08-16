@@ -37,6 +37,28 @@ const API_TOKEN_PLACEHOLDERS: Record<AiModelProvider, string> = {
 // (currently Ollama, which serves whatever the user has pulled locally).
 const FALLBACK_EXAMPLE_MODEL = { modelId: 'gemma4:31b', name: 'Gemma 4 31B' }
 
+/**
+ * Whether a display name looks like someone pasted a credential into the wrong field.
+ *
+ * Display Name and API Token are adjacent in this form, and the name is rendered verbatim in the
+ * providers list, the composer's model selector and its dropdown — so a mis-paste puts the secret
+ * on screen, durably, in a surface other workspace members can see. Guarding here rather than at
+ * each render site is both smaller and more complete: the value is rejected once, on the way in,
+ * so surfaces added later inherit the protection.
+ *
+ * Deliberately conservative — it only rejects what no plausible model name looks like. A real name
+ * ("Sonnet 4.5 (OpenRouter)") has spaces and is short; a key is long, unbroken, and usually
+ * carries a known prefix. This is a typo guard, not a secret scanner: it is not a security
+ * boundary, and it does not try to catch every key format.
+ */
+export function looksLikeCredential(name: string): boolean {
+  const value = name.trim()
+  // Known prefixes are conclusive: no model is named after one.
+  if (/^(sk-|sk-or-|sk-ant-|ghp_|gho_|xoxb-|AIza)/.test(value)) return true
+  // Otherwise: long, no whitespace, and mixed-case-or-digits — i.e. an opaque token, not a name.
+  return value.length >= 32 && !/\s/.test(value) && /[0-9]/.test(value) && /[a-zA-Z]/.test(value)
+}
+
 // Pick an example model to show in the custom-model placeholders for the given provider.
 function exampleModel(provider: AiModelProvider): { modelId: string, name: string } {
   const first = Object.entries(SUGGESTED_MODELS[provider])[0]
@@ -157,6 +179,9 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
     if (selection?.type === 'custom') {
       if (!modelId.trim()) newErrors.modelId = 'Please enter the model ID'
       if (!displayName.trim()) newErrors.displayName = 'Please enter a display name'
+      else if (looksLikeCredential(displayName)) {
+        newErrors.displayName = 'That looks like an API key. Put it in the API Token field below.'
+      }
     }
 
     const isOllama = selection?.provider === 'ollama'
