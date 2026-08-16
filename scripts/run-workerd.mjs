@@ -8,6 +8,10 @@
 //                                      [--build-only] [--no-watchdog] [--only <pkg,...>]
 //                                      [--interceptor]
 //                                      [--watchdog-interval 5000] [--watchdog-failures 3]
+//
+// Environment: FIELDOS_CA_BUNDLE=/path/ca.pem[,/path/other.pem] trusts an operator's private CA
+// for internal HTTPS services (OZL-300); FIELDOS_CA_TRUST_SYSTEM=false additionally drops the
+// system bundle, so only that private CA is trusted.
 
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -108,6 +112,46 @@ function validateAllow(allow, source = "--allow") {
   }
 }
 
+// The operator's private CA, for internal services fronted by a customer PKI (OZL-300).
+//
+// Read and validated here rather than handed to workerd as a path, for two reasons: a missing or
+// empty bundle otherwise surfaces as a TLS failure at first request -- far from its cause, and
+// indistinguishable from a genuinely untrusted peer -- and inlining the PEM keeps the generated
+// config independent of the directory it is served from.
+//
+// Deliberately not parsed beyond the PEM envelope. Whether a certificate is a usable CA is
+// workerd's call, and a hand-rolled X.509 check here would be a second, weaker opinion.
+function loadCaBundle(paths, trustSystemRaw) {
+  const trustSystem = trustSystemRaw === undefined ? true : trustSystemRaw !== "false";
+  const pems = [];
+  for (const path of paths) {
+    let pem;
+    try {
+      pem = readFileSync(path, "utf8");
+    } catch (e) {
+      throw new Error(
+          `FIELDOS_CA_BUNDLE: cannot read ${JSON.stringify(path)} (${e.code ?? e.message}).`,
+          { cause: e });
+    }
+    if (!/-----BEGIN CERTIFICATE-----/.test(pem)) {
+      throw new Error(
+          `FIELDOS_CA_BUNDLE: ${JSON.stringify(path)} contains no PEM certificate.\n` +
+          `  Expected a "-----BEGIN CERTIFICATE-----" block; a DER/.crt file needs converting ` +
+          `first (openssl x509 -inform der -in ca.crt -out ca.pem).`);
+    }
+    pems.push(pem);
+  }
+  // Refused rather than warned: this combination trusts no CA at all, so every https:// fetch
+  // fails, and the resulting error names an untrusted peer rather than the empty configuration.
+  if (!trustSystem && pems.length === 0) {
+    throw new Error(
+        `FIELDOS_CA_TRUST_SYSTEM=false requires FIELDOS_CA_BUNDLE.\n` +
+        `  Together they would trust no certificate authority at all, failing every ` +
+        `https:// request.`);
+  }
+  return { pems, trustSystem };
+}
+
 function parseArgs(argv) {
   const args = {
     out: join(ROOT, ".workerd"), port: 8080, allow: ["public", "private"], buildOnly: false,
@@ -144,6 +188,9 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 validateAllow(args.allow);
+const caBundle = loadCaBundle(
+    (process.env.FIELDOS_CA_BUNDLE ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    process.env.FIELDOS_CA_TRUST_SYSTEM);
 
 // The gatekeepers this run includes. `--only` narrows the set for a cheap subset stack (tier-2
 // tests boot 3 workers rather than 9; bundling is linear in worker count). This one Set is the
@@ -260,10 +307,15 @@ function uniqueKeyFor(id) {
 // 3. Emit config.capnp.
 // ---------------------------------------------------------------------------
 
-// capnp string literal escaping: backslash and double-quote only (no other escapes needed for
-// paths/names/values we emit here).
+// capnp string literal escaping: backslash, double-quote, and newlines.
+//
+// Newlines matter because a capnp string literal cannot span lines: an unescaped one is a parse
+// error at *boot*, long after this script exits successfully. Most values here are single-line
+// paths and names, but two are not -- a PEM CA bundle (FIELDOS_CA_BUNDLE) is inherently multi-line,
+// and instance vars forwarded from the environment are arbitrary operator text. Escaped here, in
+// the one helper every emitted string already passes through, rather than at those two call sites.
 function capnpString(s) {
-  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
 }
 
 function serviceName(pkgName) {
@@ -611,7 +663,20 @@ const ${constName(INTERCEPTOR_SERVICE)} :Workerd.Worker = (
 // inference server, on-prem MCP) speaks plain HTTP; a corporate HTTPS endpoint hits it at once.
 // `trustBrowserCas` uses the system CA bundle, which is what a deployment reaching a normally-
 // certificated internal service needs. It grants no additional reach: `allow` still governs that.
-const TLS_OPTIONS = `tlsOptions = (trustBrowserCas = true)`;
+//
+// FIELDOS_CA_BUNDLE names PEM file(s) holding the customer's own CA, for an internal service whose
+// certificate chains to a private PKI -- the airgapped default, since such a network usually cannot
+// obtain a publicly-trusted certificate. Verified by execution on workerd 1.20260801.1: the private
+// CA alone completes the handshake, and with it removed the *same* request fails
+// `unable to get local issuer certificate`, so it is the bundle doing the work and not ambient
+// trust. `trustedCertificates` is additive rather than replacing, also verified -- which is why
+// FIELDOS_CA_TRUST_SYSTEM exists: an airgapped deployment can set it to `false` to trust the
+// private CA *only*, so a public CA cannot vouch for an internal name.
+const TLS_OPTIONS = `tlsOptions = (trustBrowserCas = ${caBundle.trustSystem}` +
+    (caBundle.pems.length
+      ? `, trustedCertificates = [${caBundle.pems.map(capnpString).join(", ")}]`
+      : "") +
+    `)`;
 
 serviceEntries.push(
     `    (name = "internet-public", network = (allow = ["public"], ${TLS_OPTIONS})),`);
@@ -659,6 +724,14 @@ writeFileSync(keysPath, JSON.stringify(keys, null, 2) + "\n");
 const configPath = join(args.out, "config.capnp");
 writeFileSync(configPath, capnp);
 console.log(`\nwrote ${configPath}`);
+
+// TLS trust, printed for the same reason as reach below: a handshake refused for want of a CA
+// reports an untrusted peer, never an empty bundle, so this is the only place an operator can see
+// that the CA they supplied was actually loaded.
+console.log(`\nTLS trust: system CA bundle ${caBundle.trustSystem ? "trusted" : "NOT trusted"}` +
+    (caBundle.pems.length
+      ? `, plus ${caBundle.pems.length} operator CA file(s) (FIELDOS_CA_BUNDLE)`
+      : ""));
 
 // Print the reachability actually emitted. A refused connection is undiagnosable at runtime -- an
 // opaque token to the caller, an addressless line in the log (OZL-251) -- so this is where an

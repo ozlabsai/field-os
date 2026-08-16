@@ -123,18 +123,31 @@ to declared addresses.
 
 ---
 
-## 4. Private-CA TLS — NOT IMPLEMENTED
+## 4. Private-CA TLS
 
-**No connector supports a custom CA bundle.** Verified: the only TLS configuration anywhere is
-`scripts/run-workerd.mjs:614`, `tlsOptions = (trustBrowserCas = true)` — the *system* bundle. There
-is no `caCerts`, no `trustedCertificates`, no `NODE_EXTRA_CA_CERTS` in any source file.
+**Supported.** `FIELDOS_CA_BUNDLE` points `scripts/run-workerd.mjs` at one or more PEM CA files,
+emitted as `trustedCertificates` on every worker's outbound network service, so any connector can
+reach an internal HTTPS service whose certificate chains to the customer's own PKI.
 
-OZL-219 lists this as a required compensating control and it was not delivered. An internal PKI is
-described there as "likely immediate", so this is a **gap, not an acceptance**: a deployment whose
-internal services use a private CA cannot currently be reached over HTTPS by any connector.
+Verified by execution on workerd 1.20260801.1, not by reading the schema: a worker in the real
+generated config completed a handshake with an origin presenting a private-CA certificate, and the
+**same** request with the bundle removed failed `unable to get local issuer certificate` with the
+origin recording no handshake at all. The negative control is what makes the positive result mean
+anything.
 
-Tracked as **OZL-300**. **This item blocks any deployment with an internal PKI** and should be
-resolved rather than signed away.
+By default the private CA is *added to* the system bundle. `FIELDOS_CA_TRUST_SYSTEM=false` drops
+the system bundle, trusting the private CA alone — the stricter posture, and the one an isolated
+network usually wants, since it stops a public CA vouching for an internal name. Setting it without
+a bundle is refused rather than silently trusting nothing.
+
+Confirm the deployment's posture from the startup line (`TLS trust: ...`) rather than from the
+environment, since an unreadable or non-PEM bundle fails the run rather than degrading quietly.
+
+> **Signature — the reviewer accepts the deployment's TLS trust posture**, having confirmed the
+> startup read-out matches intent: which CAs are trusted, and whether the system bundle is trusted
+> alongside the private one.
+>
+> Name: ______________________  Role: ______________  Date: __________
 
 ---
 
@@ -267,14 +280,14 @@ OZL-231 asks that these be stated plainly rather than discovered:
 
 ## Sign-off
 
-The audit is complete when every row above is signed or resolved. As of 2026-08-16:
+The audit is complete when every row above is signed or resolved. As of 2026-08-17:
 
 | Item | State |
 |---|---|
 | 1. `global_fetch_strictly_public` | No acceptance needed — not disabled anywhere |
 | 2. SSRF review + redirect artifact | Artifact exists; `webFetch` gap pinned by test — **needs signature** |
 | 3. HomeAssistant host check | **Needs signature** |
-| 4. Private-CA TLS | **GAP — resolve, do not sign** (OZL-300) |
+| 4. Private-CA TLS | **Resolved** (OZL-300) — `FIELDOS_CA_BUNDLE`, verified by execution; posture needs signature |
 | 5. Prompt-injection framing | **Fixed** during this audit — residual scope needs signature |
 | 6. Blueprints unauthenticated | **Fixed** — authentication now required; org scoping still open |
 | 7. `sharingDomain` | **Needs signature**, and blocks multi-classification deployments |

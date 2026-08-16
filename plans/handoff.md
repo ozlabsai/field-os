@@ -1,6 +1,6 @@
 # Handoff — state of the airgap port
 
-Written 2026-08-10, last updated 2026-08-16. What is done, what is true, and what to pick up next.
+Written 2026-08-10, last updated 2026-08-17. What is done, what is true, and what to pick up next.
 
 The living design is [`fieldos.md`](./fieldos.md); the append-only record is
 [`fieldos-log.md`](./fieldos-log.md). This file is the orientation layer: read it first, then those.
@@ -29,6 +29,7 @@ inference:
 | **session bounds** | 720h clamped to the 8h env ceiling; the stored value kept; clearing inherits |
 | **org boundary** | an org-tagged public collection is invisible to an org-less viewer, while their own private collection stays visible |
 | **egress under `--allow none`** | zero `restrictPeers` / DNS-failure lines across a full run |
+| **private-CA TLS** | a worker in the real generated config completed a handshake with a private-CA origin; removing the CA failed it (2026-08-17) |
 
 `node scripts/run-workerd.mjs` does the whole thing: bundles nine workers, writes the capnp config,
 spawns and supervises workerd. Backend instance state — `ADMINS`, `ENABLE_ORG_SEPARATION`, the
@@ -94,16 +95,16 @@ server rejects, so the inference bug was invisible against it. The servers custo
 | OZL-296 | A provider display name rendered a mis-pasted API key verbatim; guarded at the input |
 | OZL-224 | **doc / sheet / deck verified airgapped** — all three round-trip, survive `kill -9`, sheets compute |
 | OZL-227 | **The sharing boundary tested** — replay-after-revocation, in CI; the dead integration suite revived |
+| OZL-300 | **Private-CA TLS** — `FIELDOS_CA_BUNDLE`, verified by execution with a negative control |
 
 ## What to pick up next
 
-**Start here.** As of 2026-08-16 (late) the shortest reads of the current state are:
+**Start here.** As of 2026-08-17 the shortest reads of the current state are:
 
 | Ticket | State |
 |---|---|
 | OZL-222 | **Still the one needing a decision, not code — and it now gates more than it did.** Org separation is built and enforcing, but a user's org comes from a gatekeeper login claim, so under **password auth everyone is org-less, and org-less is denied** once the flag is on. Enabling separation without an IdP locks people out rather than partitioning them. Ask before building anything org-shaped. |
 | OZL-231 | Security audit. **Advanced, not closable** — see PR #89. The code work is done; what remains is signatures on `docs/security-runbook.md` and the OZL-222 answer. |
-| OZL-300 | **Private-CA TLS — a hard blocker for any internal-PKI deployment.** No connector supports a custom CA bundle. Cheapest first step is a probe: does `trustedCertificates` even work on the pinned workerd? Do not design before executing that. |
 | OZL-228 | The post-OZL-239 sandbox work, and the largest open item. The log entry says it is *cheaper* than the ticket estimates. |
 | OZL-297, OZL-299 | Low-priority observations filed with repro context, not diagnosed. |
 
@@ -117,6 +118,37 @@ server rejects, so the inference bug was invisible against it. The servers custo
   API against the real stack: gating and policy behaviour, not rendering.
 
 
+
+**~~OZL-300~~ — done. Private-CA TLS works, and the probe corrected several assumptions.**
+`FIELDOS_CA_BUNDLE=/path/ca.pem` (comma-separated for several) emits `trustedCertificates` on every
+worker's outbound network service; `FIELDOS_CA_TRUST_SYSTEM=false` additionally drops the system
+bundle. Documented in `docs/configuration.md`; the runbook's section 4 is no longer a gap.
+
+Four things worth not re-deriving:
+
+1. **`trustedCertificates` is additive, not a replacement.** With `trustBrowserCas = true` *and* a
+   private CA, both a private-CA origin and `https://example.com` succeed — verified in one config.
+   So the add-versus-replace question OZL-300 raises is a real operator choice, not something the
+   mechanism forces. That is why `FIELDOS_CA_TRUST_SYSTEM` exists at all.
+2. **The log's earlier "does parse and boot" was true but not the same claim.** It was observed
+   while probing `ExternalServer`, where `tlsOptions` hangs off that unfiltered binding. OZL-300
+   needs it on the `network` service (`workerd.capnp:844`), a different place — and "parses" is not
+   "validates a chain". Both had to be executed.
+3. **`capnpString` did not escape newlines, and a PEM is inherently multi-line.** The generated
+   config was written successfully and then failed to *parse at boot* — the script exits 0, and the
+   error surfaces later as `Parse error` with no mention of the CA. Fixed in the shared helper, not
+   at the call site: instance vars forwarded from the environment (`INSTANCE_VARS`) run through the
+   same function and were exposed to the same bug.
+4. **Verification needed `--experimental`.** The first real-stack run returned `CURL_FAILED` and
+   looked like a CA failure; workerd had actually refused to start over worker-loader bindings, and
+   the origin logged no handshake. The origin's own log is what separated the two — a fixture that
+   never connects looks exactly like a rejected certificate.
+
+**A caveat this does not cover: the deployed (non-workerd) path is a separate mechanism.** OZL-300
+lists it as item 4 and nothing here touches it. `FIELDOS_CA_BUNDLE` is a `run-workerd.mjs` variable.
+
+**Stale doc noticed, not fixed:** `docs/configuration.md` "Known gaps" still says "No admin UI for
+session bounds yet", which OZL-226 (PR #73/#74) closed. Left alone as out of scope.
 
 **~~OZL-291~~ — done (PR #72, `5d68cb0`).** Org separation Phase 3b. `ENABLE_ORG_SEPARATION` can
 now be enabled without every public Context collection vanishing. The decision it was blocked on:

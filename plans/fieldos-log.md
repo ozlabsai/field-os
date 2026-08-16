@@ -1266,3 +1266,58 @@ now tested against real RS256-signed tokens and a real JWKS. The stub *signs* ra
 fixtures, deliberately: OZL-225 showed that a permissive stand-in proves nothing.
 
 The per-customer question the ticket actually asks remains unanswered and is unanswerable from here.
+
+## 2026-08-17 — OZL-300: private-CA TLS, and what the probe corrected
+
+`FIELDOS_CA_BUNDLE` trusts an operator's own CA on every worker's outbound network service;
+`FIELDOS_CA_TRUST_SYSTEM=false` additionally drops the system bundle. 77 lines in
+`scripts/run-workerd.mjs`, no connector code — `plans/fieldos.md:206` predicted exactly that, and
+the prediction held.
+
+### The probe, and why it needed a negative control
+
+A generated private CA, a real HTTPS origin presenting a leaf chaining to it, and a worker fetching
+it. Trusting the CA: `PASS`, with the origin logging one completed handshake. **The same config
+with `trustedCertificates` emptied and nothing else changed**: `unable to get local issuer
+certificate`, and the origin logging *no handshake at all*.
+
+The control is the whole point. "The fetch succeeded" is equally consistent with `trustBrowserCas`
+or some ambient trust having done the work; only the paired failure shows the bundle was load-
+bearing. Both cases were then re-run through the **real generated config**, not a hand-written
+fixture, so what is verified is what an operator gets.
+
+### Three corrections
+
+1. **The earlier "does parse and boot" observation was true and did not answer this ticket.** It
+   was made while probing `ExternalServer`, where `tlsOptions` hangs off that (unfiltered) binding.
+   OZL-300 needs it on the `network` service — a different location, and "parses" was never
+   "validates a chain" regardless.
+2. **`trustedCertificates` is additive.** With both a private CA and `trustBrowserCas = true`, a
+   private-CA origin *and* `https://example.com` both succeed. The ticket framed add-versus-replace
+   as a decision to make; it is a real one, not forced by the mechanism, hence
+   `FIELDOS_CA_TRUST_SYSTEM`. An airgapped network usually wants the strict form, so no public CA
+   can vouch for an internal name.
+3. **`capnpString` did not escape newlines.** A PEM is multi-line by construction, so the first
+   working implementation wrote a config that generated fine and then **failed to parse at boot** —
+   the script exits 0 and the error names a parse failure, never the CA. Fixed in the shared helper
+   rather than at the call site: `INSTANCE_VARS` forwards arbitrary operator text through the same
+   function and had the same latent bug.
+
+### A false negative, again distinguished only by reading the log
+
+The first real-stack run returned `CURL_FAILED`, which reads as "the private CA does not work". It
+was not: workerd had refused to start (worker-loader bindings need `--experimental`) and a stale
+origin held the port. The origin's log — *no handshake recorded* — is what separated "certificate
+rejected" from "nothing ever connected". Same lesson as the DoS repro, in the opposite direction:
+a fixture that cannot connect is indistinguishable from a real refusal unless something independent
+of the fixture confirms the request arrived.
+
+### Coverage
+
+Four cases in `scripts/workerd-outbound.test.js`, RED-checked twice: removing the newline escaping
+fails the one-line assertion, and emitting the CA on only `internet-public` fails the every-service
+assertion — the shape that would leave internal services broken while the startup line still
+reports the CA loaded. `pnpm gate` green (76 script tests, all packages), `pnpm build` green.
+
+**Not covered: the deployed non-workerd path**, which OZL-300 lists as item 4 and which is a
+separate mechanism. `FIELDOS_CA_BUNDLE` is a `run-workerd.mjs` variable only.

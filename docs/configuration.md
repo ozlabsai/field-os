@@ -239,6 +239,45 @@ assumption, so a server started with a smaller `--max-model-len` will receive ov
 `CF_AI_GATEWAY*` routes inference through Cloudflare AI Gateway and is opt-in; leave unset. When
 unset, providers are reached directly and the gateway code path is skipped entirely.
 
+## TLS and private certificate authorities
+
+Standalone workerd needs an explicit TLS context; without one every `https://` request fails before
+a connection is attempted. `scripts/run-workerd.mjs` configures it, trusting the **system** CA
+bundle by default.
+
+An internal service fronted by the customer's own PKI is not in that bundle, so its handshake fails
+with `unable to get local issuer certificate`. Point `FIELDOS_CA_BUNDLE` at the CA in PEM format:
+
+```sh
+FIELDOS_CA_BUNDLE=/etc/fieldos/internal-ca.pem node scripts/run-workerd.mjs --allow public,private
+```
+
+Several CAs may be given comma-separated. The bundle applies to **every** worker's outbound
+service, so any connector — inference, MCP, OIDC, Home Assistant — can reach an internal HTTPS
+service. It grants no additional network reach: `--allow` and `FIELDOS_INTERNAL_HOSTS` still govern
+that entirely.
+
+The private CA is **added to** the system bundle rather than replacing it, so public HTTPS keeps
+working. On an isolated network you usually want the stricter posture — trust the private CA and
+nothing else, so no public CA can vouch for an internal name:
+
+```sh
+FIELDOS_CA_BUNDLE=/etc/fieldos/internal-ca.pem FIELDOS_CA_TRUST_SYSTEM=false \
+  node scripts/run-workerd.mjs --allow public,private
+```
+
+`FIELDOS_CA_TRUST_SYSTEM=false` without a bundle is refused: together they would trust no authority
+at all and fail every `https://` request.
+
+Startup prints the trust actually configured (`TLS trust: ...`). Read it — a handshake refused for
+want of a CA reports an untrusted *peer*, never an empty bundle, so this line is the only place the
+difference is visible.
+
+A certificate must be PEM. A DER-encoded `.crt` needs converting first:
+`openssl x509 -inform der -in ca.crt -out ca.pem`.
+
+**Deployed (non-workerd) instances are a separate mechanism** and are not covered by this variable.
+
 ## Storage and platform bindings
 
 | Binding | Purpose | Self-hosted substitute |
