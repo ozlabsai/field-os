@@ -77,10 +77,9 @@ server rejects, so the inference bug was invisible against it. The servers custo
 
 ## What to pick up next
 
-**IN FLIGHT: OZL-291, org separation Phase 3b.** Branch
-`guy/ozl-291-org-separation-phase-3b`, five commits, `pnpm gate` and `pnpm build` both exit 0.
-OZL-217 (the read half) is Done. This completes the **write** half, and the decision it was blocked
-on has been made: **the admin names the target org at creation** (option A).
+**~~OZL-291~~ — done (PR #72, `5d68cb0`).** Org separation Phase 3b. `ENABLE_ORG_SEPARATION` can
+now be enabled without every public Context collection vanishing. The decision it was blocked on:
+**the admin names the target org at creation** (option A).
 
 Not a dropdown — there is nothing to enumerate. An org is whatever an IdP group claim yields after
 prefix-stripping, and the design deliberately builds no user directory, so the field is free text
@@ -101,6 +100,29 @@ Three things worth not re-deriving:
 3. **The org reaches the UI via `AppUiContext`**, filled in inside `startAccountAppUi` — which
    already runs in the user's own DO, so it is a storage read rather than a round-trip. Unlike the
    ambient session, that one is the *caller's* org, not the owner's.
+
+**IN FLIGHT: OZL-226, admin dashboard.** Session bounds shipped (PR #73, `1153660`); the org
+read-out is PR #74. The ticket stays **open** — merging #73 auto-closed it and it was reopened,
+because the remaining verification needs a *running stack*, not a code read: admin-only gating on
+standalone workerd, and the Gatekeepers three-state mode against connectors with no internet route.
+
+**A correction to OZL-226's own text, verified — do not re-derive.** It says the UI must "reject or
+clamp anything above" the session ceiling. **Rejecting server-side would have been wrong.**
+`admin-config.ts:295-297` deliberately sanitizes-then-clamps-on-read precisely so lowering the env
+ceiling tightens existing deployments immediately, rather than failing against a stale stored value.
+Implementing the ticket literally would have broken a documented property. The resolution: the panel
+blocks above-ceiling entry as UX, the server accepts and clamps, and neither rejects.
+
+Consequence for any future admin panel over clamped config: **the stored value and the effective
+value are different numbers.** `AdminSettingsView.sessionBounds` carries three per bound (ceiling,
+stored, effective) because a panel echoing back what was saved would display a number that is not in
+force.
+
+**Two `AuthenticatedApi` methods still have no UI**, found while building the read-out and worth
+knowing: `revokeSessionsForUser` and `restampUnknownOrgs` were as unreachable as `getOrgForUser`.
+PR #74 surfaces all three. They live on `AuthenticatedApi` rather than `AdminApi` because
+`AdminApiImpl` is documented as fully user-independent, so a panel for them calls a different
+capability than every other panel on the page.
 
 **Three corrections to OZL-217's own text, all verified — do not re-derive:**
 - Its two named chokepoints (`#assertCanRead`, `hasCollectionAccess`) are both **secondary**. The
@@ -233,6 +255,20 @@ Each of these looked like success while being wrong. That is what makes them wor
 - **`uniqueKey` values are permanent.** They become the on-disk directory name and there is no
   migration mechanism. `run-workerd.mjs` persists them in `.workerd/keys.json` — do not regenerate.
 - **`SIGTERM` is ignored by a wedged workerd.** Go straight to `SIGKILL`.
+- **A `pnpm gate` failure under load is usually a timeout, and it does not look like one.** Seen
+  twice on 2026-08-16 at load average ~34: `backend-utils` "failed" after **978 seconds with
+  `tests 0ms`** (it never ran a test — it hung), and three unrelated `workshop-frontend` files
+  failed at ~6.6s each, vitest's default timeout, in a run reporting `tests 1.40s` against
+  `import 341s`. All passed in isolation in seconds. Distinguish it from a real break by the
+  *shape*: `tests 0ms` with a huge duration means starvation, not assertion failure. Check
+  `uptime` before believing a gate failure, re-run the named package alone, and confirm the failing
+  files have any connection to what you changed — here none of them referenced `AdminPage`, and no
+  test covers `AdminPage` at all. Note this is **not** the orphaned-`workerd` trap below: only one
+  was running.
+- **A background task's "exit code 0" notification is the wrapper's, not your command's.** A
+  `pnpm gate` that exited 1 was reported as `completed (exit code 0)`. Grep the output file for
+  your own `GATE_EXIT=` marker rather than trusting the notification — the same "read the log, not
+  the exit code" rule as the DoS repro.
 - **Tier-1 fixtures leak `workerd serve` processes under parallel load**, and nothing reaps them.
   Found 23 orphans mid-session, the oldest **26 hours** old — so they survive across runs and
   accumulate. Neither a tier-1 nor a tier-2 file leaks when run alone, so it is a race under
