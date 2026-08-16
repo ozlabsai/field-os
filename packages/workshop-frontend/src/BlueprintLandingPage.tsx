@@ -88,17 +88,27 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
     [vendors],
   )
   // Fetch blueprint metadata.
+  //
+  // Requires a signed-in session: `getBlueprint` moved from PublicApi to AuthenticatedApi under
+  // OZL-231/OZL-223, so a blueprint link now shows the sign-in wall first rather than resolving
+  // anonymously. Waits for auth to settle instead of racing it -- `authLoading` is true on the
+  // first render, and treating that as "signed out" would flash the wrong state.
   useEffect(() => {
     if (!id) {
       setLoading(false)
       setNotFound(true)
       return
     }
+    if (authLoading) return
+    if (!(isAuthenticated && authenticatedApi)) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     setNotFound(false)
     setError(null)
 
-    rpcStub.getBlueprint(id).then(result => {
+    authenticatedApi.getBlueprint(id).then((result) => {
       if (result) {
         setBlueprint(result)
       } else {
@@ -109,7 +119,7 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
     }).finally(() => {
       setLoading(false)
     })
-  }, [id, rpcStub])
+  }, [id, authLoading, isAuthenticated, authenticatedApi])
 
   useEffect(() => {
     setActiveBindingName(null)
@@ -585,12 +595,15 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
 
   const handleDownload = async () => {
     if (!id || !blueprint) return
+    // Downloading is authenticated for the same reason the metadata fetch is; the button is only
+    // rendered for a signed-in session, so this is a type-level guard rather than a reachable path.
+    if (!authenticatedApi) return
     setDownloading(true)
     setError(null)
 
     try {
       await saveStreamToFile(
-        () => rpcStub.downloadBlueprint(id),
+        () => authenticatedApi.downloadBlueprint(id),
         makeBlueprintFilename(blueprint.metadata.title, blueprint.metadata.version),
         {
           description: 'Gadget Blueprint',

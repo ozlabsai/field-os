@@ -430,6 +430,26 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     return this.user.forgetSharedGadget(gadgetId);
   }
 
+  async getBlueprint(id: string): Promise<BlueprintPublicInfo | null> {
+    let kvRecord = await readBlueprintKvRecord(this.env, id);
+    if (!kvRecord) return null;
+
+    return publicBlueprintInfo(id, kvRecord.metadata);
+  }
+
+  async downloadBlueprint(id: string): Promise<ReadableStream<Uint8Array>> {
+    let kvRecord = await readBlueprintKvRecord(this.env, id);
+    if (!kvRecord) throw new Error("Blueprint not found.");
+
+    let r2Object = await this.env.BLUEPRINT_CONTENT.get(`${id}/${kvRecord.metadata.version}`);
+    if (!r2Object) throw new Error("Blueprint content not found in R2.");
+
+    let metadata = { ...kvRecord.metadata };
+    delete metadata.screenshot;
+
+    return buildBlueprintArchiveStream(metadata, r2Object.body, r2Object.size);
+  }
+
   async listOwnBlueprints(): Promise<BlueprintUserSummary[]> {
     return this.user.listBlueprints();
   }
@@ -849,25 +869,6 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
     return `${username}:${token}`;
   }
 
-  async getBlueprint(id: string): Promise<BlueprintPublicInfo | null> {
-    let kvRecord = await readBlueprintKvRecord(this.env, id);
-    if (!kvRecord) return null;
-
-    return publicBlueprintInfo(id, kvRecord.metadata);
-  }
-
-  async downloadBlueprint(id: string): Promise<ReadableStream<Uint8Array>> {
-    let kvRecord = await readBlueprintKvRecord(this.env, id);
-    if (!kvRecord) throw new Error("Blueprint not found.");
-
-    let r2Object = await this.env.BLUEPRINT_CONTENT.get(`${id}/${kvRecord.metadata.version}`);
-    if (!r2Object) throw new Error("Blueprint content not found in R2.");
-
-    let metadata = { ...kvRecord.metadata };
-    delete metadata.screenshot;
-
-    return buildBlueprintArchiveStream(metadata, r2Object.body, r2Object.size);
-  }
 }
 
 export default {
