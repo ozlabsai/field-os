@@ -3,7 +3,7 @@ import { RpcStub } from 'capnweb'
 import { Switch, Textarea, Input, Button, Tabs, useKumoToastManager } from '@cloudflare/kumo'
 import { Hexagon, ShieldWarning, UserPlus } from '@phosphor-icons/react'
 import { useAuthenticatedApi } from './AuthContext'
-import { AdminApi, AdminFormat, AdminResourceVendor, AdminSessionBounds, AmbientGatekeeperMode, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR } from '@gadgets/workshop-shared/api'
+import { AdminApi, AdminFormat, AdminResourceVendor, AdminSessionBounds, AmbientGatekeeperMode, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR, OrgLookup } from '@gadgets/workshop-shared/api'
 import { applyAccentColor, DEFAULT_ACCENT_COLOR } from './theme'
 import { cacheBustSiteLogoUrl, prepareSiteLogo } from './siteLogoUtils'
 import SiteLogo from './components/SiteLogo'
@@ -83,6 +83,18 @@ export default function AdminPage() {
   const [lifetimeHoursDraft, setLifetimeHoursDraft] = useState('')
   const [idleMinutesDraft, setIdleMinutesDraft] = useState('')
   const [savingSessionBounds, setSavingSessionBounds] = useState(false)
+
+  // User lookup: username being searched, the last resolved OrgLookup (null = not yet looked up),
+  // and per-action busy/confirm flags. This calls authenticatedApi directly rather than admin.api —
+  // AdminApiImpl is documented as fully user-independent (it never holds a stub into any user's
+  // Durable Object), so anything that must reach into a *specific* named account's state lives on
+  // AuthenticatedApi instead, admin-gated server-side on each method.
+  const [lookupUsername, setLookupUsername] = useState('')
+  const [lookupResult, setLookupResult] = useState<{ username: string; org: OrgLookup } | null>(null)
+  const [lookingUp, setLookingUp] = useState(false)
+  const [revokeConfirming, setRevokeConfirming] = useState(false)
+  const [revoking, setRevoking] = useState(false)
+  const [restamping, setRestamping] = useState(false)
 
   // Gatekeeper resource config, and the set of resource keys ("vendorId\u0000urlPattern") busy toggling.
   const [resourceVendors, setResourceVendors] = useState<AdminResourceVendor[]>([])
@@ -311,6 +323,87 @@ export default function AdminPage() {
       toasts.add({ title: message, variant: 'error' })
     } finally {
       setSavingSessionBounds(false)
+    }
+  }
+
+  // Look up what a username currently resolves to. Uses authenticatedApi, not admin.api: this
+  // reaches into a specific named account's stored state, which AdminApiImpl deliberately never
+  // holds a stub to (see the field's own doc-comment) — the admin-only check happens inside
+  // getOrgForUser itself instead of at capability-mint time.
+  const handleLookupOrg = async () => {
+    const username = lookupUsername.trim()
+    if (!username) return
+    setLookingUp(true)
+    setRevokeConfirming(false)
+    try {
+      const org = await authenticatedApi.getOrgForUser(username)
+      setLookupResult({ username, org })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to look up account'
+      toasts.add({ title: message, variant: 'error' })
+    } finally {
+      setLookingUp(false)
+    }
+  }
+
+  // Destructive and irreversible (every existing session for the account is dropped), so this is a
+  // two-click inline confirm rather than firing on the first click — there's no undo, and a
+  // mistyped-but-real username would otherwise sign out the wrong person with no warning.
+  const handleRevokeSessions = async () => {
+    if (!lookupResult) return
+    if (!revokeConfirming) {
+      setRevokeConfirming(true)
+      return
+    }
+    setRevoking(true)
+    try {
+      await authenticatedApi.revokeSessionsForUser(lookupResult.username)
+      toasts.add({ title: `Revoked all sessions for ${lookupResult.username}`, variant: 'success' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to revoke sessions'
+      toasts.add({ title: message, variant: 'error' })
+    } finally {
+      setRevoking(false)
+      setRevokeConfirming(false)
+    }
+  }
+
+  // Sweep every workspace owned by the account whose org stamp failed at creation, paging through
+  // restampUnknownOrgs until the server reports done. Capped at PAGE_LIMIT calls: the server hands
+  // back a cursor forever if something upstream is stuck re-failing the same page, and a runaway
+  // loop from the browser is worse than an honest "stopped early, run it again" toast.
+  const handleRepairOrgStamps = async () => {
+    if (!lookupResult) return
+    setRestamping(true)
+    const PAGE_LIMIT = 50
+    let repaired = 0
+    let failed = 0
+    let cursor: string | undefined
+    let done = false
+    try {
+      for (let page = 0; page < PAGE_LIMIT && !done; page++) {
+        const result = await authenticatedApi.restampUnknownOrgs(lookupResult.username, cursor)
+        repaired += result.repaired
+        failed += result.failed
+        cursor = result.cursor
+        done = result.done
+      }
+      if (done) {
+        toasts.add({
+          title: `Repaired ${repaired} workspace${repaired === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}`,
+          variant: failed ? 'error' : 'success',
+        })
+      } else {
+        toasts.add({
+          title: `Stopped after ${PAGE_LIMIT} pages (${repaired} repaired, ${failed} failed) — run again to continue`,
+          variant: 'error',
+        })
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to repair org stamps'
+      toasts.add({ title: message, variant: 'error' })
+    } finally {
+      setRestamping(false)
     }
   }
 
@@ -568,6 +661,92 @@ export default function AdminPage() {
               Save
             </Button>
           </div>
+        </div>
+      )}
+
+      {/* User lookup. Reads authenticatedApi, not admin.api: AdminApiImpl is documented as fully
+          user-independent (it never holds a stub into any particular user's Durable Object), so
+          anything that must resolve state for one *named* account lives on AuthenticatedApi
+          instead, with the admin check done inside each method rather than at capability-mint
+          time. The whole point of this panel is that "no such account" and "account with no org"
+          are different failures with different fixes — a typo'd username vs. a broken/missing IdP
+          group claim — and collapsing them into one blank result would make the two
+          indistinguishable, which is exactly the confusion this read-out exists to prevent. */}
+      {activeTab === 'access' && (
+        <div className="bg-kumo-elevated border border-kumo-line rounded-xl p-6">
+          <h2 className="text-lg font-semibold text-kumo-strong mb-1">User lookup</h2>
+          <p className="text-sm text-kumo-subtle mb-5">
+            Look up which organization an account currently resolves to, revoke its sessions, or
+            repair workspaces whose org stamp failed at creation.
+          </p>
+
+          <div className="flex items-end gap-2">
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-kumo-subtle mb-2">Username</label>
+              <Input
+                value={lookupUsername}
+                onChange={(e) => {
+                  setLookupUsername(e.target.value)
+                  setLookupResult(null)
+                  setRevokeConfirming(false)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleLookupOrg()
+                }}
+                placeholder="username"
+              />
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleLookupOrg}
+              loading={lookingUp}
+              disabled={!lookupUsername.trim()}
+            >
+              Look up
+            </Button>
+          </div>
+
+          {lookupResult && (
+            <div className="mt-4 p-4 rounded-lg bg-kumo-tint">
+              {/* exists and orgId are different facts and must render as different sentences: a
+                  missing account (typo) and an existing account with no org (broken/missing group
+                  claim) look identical if we only ever printed "orgId ?? 'none'". */}
+              {!lookupResult.org.exists ? (
+                <p className="text-sm text-kumo-strong">No account found for that username.</p>
+              ) : lookupResult.org.orgId === null ? (
+                <>
+                  <p className="text-sm text-kumo-strong">
+                    This account resolved to no organization.
+                  </p>
+                  <p className="text-xs text-kumo-subtle mt-1">
+                    They reach nothing org-scoped. This usually means the IdP group claim was
+                    missing or ambiguous at last sign-in.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-kumo-strong">
+                  Organization: <span className="font-mono">{lookupResult.org.orgId}</span>
+                </p>
+              )}
+
+              {lookupResult.org.exists && (
+                <div className="flex items-center gap-2 mt-4">
+                  <Button
+                    variant={revokeConfirming ? 'destructive' : 'secondary'}
+                    size="sm"
+                    onClick={handleRevokeSessions}
+                    loading={revoking}
+                  >
+                    {revokeConfirming ? 'Confirm revoke' : 'Revoke sessions'}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={handleRepairOrgStamps} loading={restamping}>
+                    Repair org stamps
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
