@@ -101,13 +101,6 @@ export interface PublicApi extends RpcTarget {
   createAccount(username: string, displayName: string, passwordHash: Uint8Array)
       : Promise<string | null>;
 
-  // Fetch blueprint metadata by ID. Returns null if the blueprint doesn't exist. No
-  // authentication required (knowing the ID is sufficient, since a blueprint is "just data").
-  getBlueprint(id: string): Promise<BlueprintPublicInfo | null>;
-
-  // Download a blueprint as a `.gadget` archive stream. The archive contains only
-  // BlueprintMetadata plus the current blueprint code snapshot, not the full KV record.
-  downloadBlueprint(id: string): Promise<ReadableStream<Uint8Array>>;
 }
 
 // Subscription callback for AuthenticatedApi.subscribeConnectedAccounts().
@@ -556,6 +549,20 @@ export interface AuthenticatedApi extends RpcTarget {
 
   // List all blueprints created by the current user (from User DO). Useful for an audit
   // view in Settings.
+  // Fetch blueprint metadata by ID. Returns null if the blueprint doesn't exist.
+  //
+  // Authenticated, though the result is deployment-wide: any signed-in user may read any
+  // blueprint. It moved here from `PublicApi` under OZL-231/OZL-223 -- reachable by id alone is an
+  // insecure direct object reference, and the ids are not uniformly capability-grade (the shipped
+  // format blueprints are literally `format.document`, `format.spreadsheet`, `format.slides`), so
+  // "knowing the id" could not be relied on as the authorization. Scoping blueprints per-org is a
+  // separate, larger decision that is deliberately NOT taken here.
+  getBlueprint(id: string): Promise<BlueprintPublicInfo | null>;
+
+  // Download a blueprint as a `.gadget` archive stream. The archive contains only
+  // BlueprintMetadata plus the current blueprint code snapshot, not the full KV record.
+  downloadBlueprint(id: string): Promise<ReadableStream<Uint8Array>>;
+
   listOwnBlueprints(): Promise<BlueprintUserSummary[]>;
 
   // Return a blueprint created by the current user, or null if it is not owned by this user.

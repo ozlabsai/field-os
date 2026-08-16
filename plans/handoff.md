@@ -89,18 +89,23 @@ server rejects, so the inference bug was invisible against it. The servers custo
 | OZL-291 | **Phase 3b** — public collections tagged and the UI/write paths scoped; the flag is now usable |
 | OZL-226 | **Admin dashboard verified airgapped** — session bounds and the org read-out built, then exercised on a live `--allow none` stack |
 | OZL-293 | **The code editor loaded Monaco from a CDN** and could not work airgapped; fixed, with a build-time guard over bundled output |
+| OZL-292 | One `constantTimeEqual`; `webFetch`'s redirect pinned; the oidc host-guard gap written down |
+| OZL-295 | **Standalone workerd had no TLS context** — no worker could make *any* https request; fixed |
+| OZL-296 | A provider display name rendered a mis-pasted API key verbatim; guarded at the input |
+| OZL-224 | **doc / sheet / deck verified airgapped** — all three round-trip, survive `kill -9`, sheets compute |
+| OZL-227 | **The sharing boundary tested** — replay-after-revocation, in CI; the dead integration suite revived |
 
 ## What to pick up next
 
-**Start here.** As of 2026-08-16 the shortest reads of the current state are:
+**Start here.** As of 2026-08-16 (late) the shortest reads of the current state are:
 
 | Ticket | State |
 |---|---|
-| OZL-222 | **The one needing a decision, not code.** Which IdP do customers run, and can it emit an app-scoped groups claim? Everything below about org separation bottoms out here. |
-| OZL-292 | Filed, unstarted. Three verified gaps left by OZL-219 — none widens network reach. Self-contained. |
-| OZL-224, OZL-227 | Verification, not construction, and now cheap (see the run command above). |
-| OZL-228 | The post-OZL-239 sandbox work. The log entry says it is *cheaper* than the ticket estimates. |
-| OZL-231 | Security audit. Highest-priority open item; fold OZL-292 into it or resolve that first. |
+| OZL-222 | **Still the one needing a decision, not code — and it now gates more than it did.** Org separation is built and enforcing, but a user's org comes from a gatekeeper login claim, so under **password auth everyone is org-less, and org-less is denied** once the flag is on. Enabling separation without an IdP locks people out rather than partitioning them. Ask before building anything org-shaped. |
+| OZL-231 | Security audit. **Advanced, not closable** — see PR #89. The code work is done; what remains is signatures on `docs/security-runbook.md` and the OZL-222 answer. |
+| OZL-300 | **Private-CA TLS — a hard blocker for any internal-PKI deployment.** No connector supports a custom CA bundle. Cheapest first step is a probe: does `trustedCertificates` even work on the pinned workerd? Do not design before executing that. |
+| OZL-228 | The post-OZL-239 sandbox work, and the largest open item. The log entry says it is *cheaper* than the ticket estimates. |
+| OZL-297, OZL-299 | Low-priority observations filed with repro context, not diagnosed. |
 
 **Two claims deliberately NOT made, which a fresh session should not assume:**
 
