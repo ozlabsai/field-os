@@ -69,8 +69,12 @@ async function openRejection(
   return await rejection(workspace.getMetadata());
 }
 
-// TODO: This test suite keeps timing out in CI, skipping for now.
-describe.skip("openGadget errors across native RPC and Cap'n Web", () => {
+// Previously skipped with "keeps timing out in CI". That skip is stale: the cause was the cold
+// start (whichever test runs first pays for booting workerd and instantiating the whole backend
+// bundle), and the config's `testTimeout: 60_000` -- added later, with a comment saying exactly
+// that -- now clears it. Re-enabled after confirming the suite passes in ~6s locally; a skipped
+// suite reads as coverage while testing nothing, which is worse than having no suite at all.
+describe("openGadget errors across native RPC and Cap'n Web", () => {
   it("retains enumerable Error.code at the native Durable Object boundary", async () => {
     const code = OPEN_GADGET_ERROR_CODES.workspaceNotFound;
     const local = createOpenGadgetError(code);
