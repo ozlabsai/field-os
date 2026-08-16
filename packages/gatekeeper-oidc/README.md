@@ -68,6 +68,16 @@ full reasoning and the Entra constraint.
 - **The grant is transient.** Once the Workshop has read the email, the account self-destructs on a
   two-minute alarm. Abandoned attempts are reaped after an hour.
 - **No access token is kept**, because there is no resource to reach with one.
+- **There is deliberately no internal-host guard here** (OZL-292). Unlike the MCP connectors, this
+  worker has no `isBlockedHost`/`sdkFetch` equivalent, and it *is* granted RFC1918 reach via the
+  `oidc` role in `scripts/run-workerd.mjs` — an on-prem IdP is the normal case. That is accepted
+  rather than overlooked, because what it fetches is not attacker-influenced: every request goes to
+  `OIDC_ISSUER` (operator configuration, not user input), the discovery document must declare a
+  matching `issuer`, and `requireUrl` pins every advertised endpoint to https on the issuer's own
+  origin. A host allowlist would restate a constraint that is already enforced more tightly, and
+  the remaining control — which addresses this worker may reach at all — belongs to the workerd
+  network policy rather than to application code. Reconsider if this worker ever fetches a URL
+  derived from anything but `OIDC_ISSUER`.
 
 ## Layout
 

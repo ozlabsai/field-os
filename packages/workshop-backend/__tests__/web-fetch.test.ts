@@ -306,3 +306,98 @@ describe("formatWebFetchResult", () => {
     expect(out).toContain("content-type: (unspecified)");
   });
 });
+
+// The redirect path had zero tests (OZL-292). `webFetch` passes `redirect: "follow"` and validates
+// only the *input* URL, so a permitted origin can redirect the fetch anywhere the worker can
+// reach. These pin the behaviour in both directions rather than asserting a fix: the blast radius
+// is bounded by the workerd network policy (`INTERNAL_REACH`), not by anything in this file, so a
+// future change to the `redirect:` mode or to post-redirect validation should have to update a
+// test rather than pass silently.
+describe("webFetch redirect handling", () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  // `redirect: "follow"` means the runtime resolves the chain and reports the landing URL as
+  // `response.url`; the stub stands in for that already-followed result.
+  function mockRedirectedTo(finalUrl: string, body = "landed", contentType = "text/plain") {
+    globalThis.fetch = vi.fn(async () => {
+      const response = new Response(body, {
+        status: 200,
+        headers: { "content-type": contentType },
+      });
+      Object.defineProperty(response, "url", { value: finalUrl, configurable: true });
+      return response;
+    }) as unknown as typeof globalThis.fetch;
+    return globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+  }
+
+  it("asks the runtime to follow redirects", async () => {
+    const fetchSpy = mockRedirectedTo("https://example.com/final");
+
+    await webFetch(makeEnv(), { url: "https://example.com/start", raw: true });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][1]).toMatchObject({ redirect: "follow" });
+  });
+
+  it("reports the post-redirect URL as finalUrl, not the requested one", async () => {
+    mockRedirectedTo("https://elsewhere.example/landing");
+
+    const result = await webFetch(makeEnv(), {
+      url: "https://example.com/start",
+      raw: true,
+    });
+
+    expect(result.finalUrl).toBe("https://elsewhere.example/landing");
+    expect(result.body).toBe("landed");
+  });
+
+  // The gap the ticket names: the input URL is validated, the landing URL is not. A cross-origin
+  // redirect is currently followed and returned. Pinned so that adding post-redirect validation
+  // is a deliberate change to this expectation rather than an invisible one.
+  it("does NOT re-validate the URL after a cross-origin redirect", async () => {
+    mockRedirectedTo("https://attacker.example/internal");
+
+    const result = await webFetch(makeEnv(), {
+      url: "https://trusted.example/start",
+      raw: true,
+    });
+
+    expect(result.finalUrl).toBe("https://attacker.example/internal");
+    expect(result.status).toBe(200);
+  });
+
+  it("still rejects a non-https URL before any fetch is attempted", async () => {
+    const fetchSpy = mockRedirectedTo("https://example.com/final");
+
+    await expect(
+      webFetch(makeEnv(), { url: "http://example.com/start", raw: true }),
+    ).rejects.toThrow(/https/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the requested URL when the runtime reports no final URL", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      const response = new Response("body", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      });
+      Object.defineProperty(response, "url", { value: "", configurable: true });
+      return response;
+    }) as unknown as typeof globalThis.fetch;
+
+    const result = await webFetch(makeEnv(), {
+      url: "https://example.com/start",
+      raw: true,
+    });
+
+    expect(result.finalUrl).toBe("https://example.com/start");
+  });
+});
