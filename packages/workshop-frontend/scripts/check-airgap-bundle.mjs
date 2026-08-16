@@ -72,11 +72,25 @@ for (const target of targets) {
   }
 }
 
+// Gatekeeper configurator UIs are embedded percent-encoded (the module is inlined into a data: URL),
+// so `https://` appears as `https%3A%2F%2F` and a plain scan sees nothing. Decoding first is what
+// makes the check able to fail on those bundles at all -- without it the guard silently passes
+// everything, which is worse than no guard because it reads as coverage.
+// Matches a host after either form. Decoding the WHOLE file does not work -- these bundles contain
+// stray `%` that make `decodeURIComponent` throw on the full string -- so the encoded form is
+// matched directly instead.
+const HOST_PATTERNS = [
+  /https?:\/\/([a-zA-Z0-9._-]+)/g,          // plain
+  /https?%3A%2F%2F([a-zA-Z0-9._-]+)/gi,     // percent-encoded
+];
+
 const found = new Map();
 for (const file of files) {
   const text = await readFile(file, "utf8");
-  for (const [, host] of text.matchAll(/https?:\/\/([a-zA-Z0-9._-]+)/g)) {
-    if (!ALLOWED.has(host)) found.set(host, file);
+  for (const pattern of HOST_PATTERNS) {
+    for (const [, host] of text.matchAll(pattern)) {
+      if (!ALLOWED.has(host)) found.set(host, file);
+    }
   }
 }
 

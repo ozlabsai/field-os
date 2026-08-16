@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { watch } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -5,6 +6,7 @@ import ts from "typescript";
 import { loadEnv } from "vite";
 
 const packageDir = resolve(process.argv[2] ?? ".");
+const rootDir = resolve(new URL("..", import.meta.url).pathname);
 const watchMode = process.argv.includes("--watch");
 const quietMode = process.argv.includes("--quiet");
 const frontendReportingEnabled =
@@ -1038,8 +1040,32 @@ async function buildConfiguratorUIs() {
   return { ok: true, total: configuratorUIs.length, writtenCount };
 }
 
+// Fail the build if a generated module would reach the internet at runtime (OZL-293).
+//
+// Here rather than in each gatekeeper's package.json: all five invoke this one script, so checking
+// here covers the sixth gatekeeper nobody has written yet. The generated modules are currently
+// clean -- they are small and dependency-light -- but "clean today" is not "clean tomorrow", and
+// the defect this guards against is invisible in source by construction.
+async function checkGeneratedBundles() {
+  let generated;
+  try {
+    generated = (await readdir(generatedDir))
+        .filter(name => name.endsWith(".txt"))
+        .map(name => join(generatedDir, name));
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  if (generated.length === 0) return;
+
+  const checker = join(rootDir, "packages", "workshop-frontend", "scripts", "check-airgap-bundle.mjs");
+  const result = spawnSync(process.execPath, [checker, ...generated], { stdio: "inherit" });
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
 const initial = await buildConfiguratorUIs();
 if (!initial.ok) process.exit(0);
+await checkGeneratedBundles();
 
 if (initial.writtenCount > 0) {
   console.log(`generated ${initial.writtenCount} configurator UI module${initial.writtenCount === 1 ? "" : "s"}: ${packageDir}`);
