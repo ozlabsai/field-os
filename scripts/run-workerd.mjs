@@ -33,6 +33,15 @@ const INSTANCE_VARS = [
   "AUTH_GATEKEEPERS",
 ];
 
+// Instance vars a GATEKEEPER reads from its own env as well as the backend. A gatekeeper is a
+// separate worker sharing no code with the backend, so `org-scoping.ts` reads ENABLE_ORG_SEPARATION
+// itself; docs/configuration.md states the operator sets one value and both must receive it.
+//
+// Forwarding it to only the backend would produce the worst possible test result: the backend
+// enforces the boundary while the Context gatekeeper does not, so a cross-org public collection
+// stays visible and the boundary *looks* like it works.
+const GATEKEEPER_INSTANCE_VARS = ["ENABLE_ORG_SEPARATION"];
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGES_DIR = join(ROOT, "packages");
 const FRONTEND_DIST = join(PACKAGES_DIR, "workshop-frontend", "dist");
@@ -415,6 +424,12 @@ for (const w of workers) {
     const shortName = pkgName.slice("gatekeeper-".length);
     bindingLines.push(
         `      (name = "BASE_URL", text = ${capnpString(`${publicBaseUrl}/gatekeeper/${shortName}`)}),`);
+    for (const name of GATEKEEPER_INSTANCE_VARS) {
+      const value = process.env[name];
+      if (value !== undefined) {
+        bindingLines.push(`      (name = ${capnpString(name)}, text = ${capnpString(value)}),`);
+      }
+    }
   }
 
   // Service bindings the package declares for itself, e.g. the router's WORKSHOP_BACKEND. These
