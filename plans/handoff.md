@@ -309,7 +309,8 @@ Each of these looked like success while being wrong. That is what makes them wor
   the `SYSTEM_PROMPT` template literal as examples for the model. Only `server.ts`'s `export { ... }`
   list is authoritative.
 - **Running the release build breaks the next `types:check`.** It regenerates each package's
-  gitignored `.wrangler/validate/`; clear with `rm -rf packages/*/.wrangler`. `pnpm gate` trips
+  gitignored `.wrangler/validate/`; clear with
+  `find packages -maxdepth 2 -name .wrangler -type d -exec rm -rf {} +`. `pnpm gate` trips
   this on itself, so a `types:check` failure in `gatekeeper-oidc` right after a gate run is almost
   always this and not your change.
 - **Local and CI resolve types differently, and a fix for one can break the other.** During the
@@ -351,6 +352,16 @@ Each of these looked like success while being wrong. That is what makes them wor
   local Monaco chunk exists — a string in a bundle is not by itself a defect, so check all three.
   Cleared while there: `example.com` is admin placeholder text, `react.dev`/`fb.me`/`w3.org` are
   error-message and namespace strings, and the built CSS has no `@font-face` or external `url()`.
+- **A `pnpm build` run immediately after `pnpm gate` can fail on a torn generated file.** Seen on
+  2026-08-16: `gatekeeper-oidc` failed with three `error TS2345` in `.wrangler/validate/src/oidc.ts`,
+  all reading `Type 'string' is not assignable to type '"workerEntrypoint"'`. That signature means a
+  **partially-written** generated file (the OZL-256 race), not a type error you introduced — the
+  build passes reproducibly from a cleared tree. Distinguish it from the `.wrangler` non-idempotence
+  trap below by the message: this one is a *widened* literal type in generated output, that one is
+  ordinary type errors in machine-generated sources. Both are cured by clearing `.wrangler`, so it
+  is tempting to stop at the first explanation that fits — but they are different bugs, and reading
+  a `main` comparison as proof either way is a mistake when the comparison also cleared the tree.
+
 - **A `pnpm gate` failure under load is usually a timeout, and it does not look like one.** Seen
   twice on 2026-08-16 at load average ~34: `backend-utils` "failed" after **978 seconds with
   `tests 0ms`** (it never ran a test — it hung), and three unrelated `workshop-frontend` files
@@ -452,7 +463,7 @@ before that date was gated by a developer's local run alone (OZL-253).
 
 ## Deliberate limitations, stated so they are not rediscovered
 
-- **The gate is not idempotent: a second `pnpm gate` without `rm -rf packages/*/.wrangler` fails.**
+- **The gate is not idempotent: a second `pnpm gate` without clearing `.wrangler` first fails.**
   Deterministic, pre-existing, and *not* the OZL-256 flake — it is the `.wrangler/validate` trap
   below, firing on `types:check` in `gatekeeper-oidc`. It is always that package because its
   tracked `worker-configuration.d.ts` is the **only** one whose `mainModule` points into the
@@ -462,6 +473,11 @@ before that date was gated by a developer's local run alone (OZL-253).
   wrote. `exclude` in tsconfig cannot fix it (the file is reached by import, not by the `include`
   glob — tried and reverted); regenerating that one file on a clean tree probably can. Clear
   `.wrangler` between gate runs until someone does.
+  Clear with `find packages -maxdepth 2 -name .wrangler -type d -exec rm -rf {} +`, **not**
+  `rm -rf packages/*/.wrangler`: under zsh an unmatched glob is an error, so that form exits 1 and
+  deletes nothing when the dirs are already absent. It works when they exist, which is why it
+  looked fine for so long — the failure is invisible in exactly the case where it does no harm,
+  and it silently breaks a `&&` chain that expects it to succeed.
 - A runaway gadget interrupts the deployment until the watchdog restarts it (OZL-239). The
   post-Alpha fix (gadget execution in a separate OS process) is **cheaper than OZL-239 estimates** —
   see the 2026-08-12 log entry. Verified by execution: each facet already has its own sqlite file,
