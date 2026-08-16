@@ -1,6 +1,6 @@
 # Handoff — state of the airgap port
 
-Written 2026-08-10. What is done, what is true, and what to pick up next.
+Written 2026-08-10, last updated 2026-08-16. What is done, what is true, and what to pick up next.
 
 The living design is [`fieldos.md`](./fieldos.md); the append-only record is
 [`fieldos-log.md`](./fieldos-log.md). This file is the orientation layer: read it first, then those.
@@ -25,9 +25,19 @@ inference:
 | **tool calling** | `executeCode` ran and returned `42` |
 | gadget → on-prem MCP | read as observation, write queued for approval |
 | **restart** | `kill -9`, then everything was still there |
+| **admin gating** | a user in `ADMINS` gets the capability, another gets `null` (2026-08-16) |
+| **session bounds** | 720h clamped to the 8h env ceiling; the stored value kept; clearing inherits |
+| **org boundary** | an org-tagged public collection is invisible to an org-less viewer, while their own private collection stays visible |
+| **egress under `--allow none`** | zero `restrictPeers` / DNS-failure lines across a full run |
 
 `node scripts/run-workerd.mjs` does the whole thing: bundles nine workers, writes the capnp config,
-spawns and supervises workerd.
+spawns and supervises workerd. Backend instance state — `ADMINS`, `ENABLE_ORG_SEPARATION`, the
+session ceilings — is forwarded from the process environment, which is what makes the bottom four
+rows above testable at all:
+
+```sh
+ADMINS='["alice"]' ENABLE_ORG_SEPARATION=true SESSION_MAX_LIFETIME_HOURS=8   node scripts/run-workerd.mjs --allow none
+```
 
 ## The five things most worth knowing
 
@@ -76,6 +86,27 @@ server rejects, so the inference bug was invisible against it. The servers custo
 | OZL-254 | Answered: dynamic workers, DOs and facets are workerd-native; only `browser` needs a substitute |
 
 ## What to pick up next
+
+**Start here.** As of 2026-08-16 the shortest reads of the current state are:
+
+| Ticket | State |
+|---|---|
+| OZL-222 | **The one needing a decision, not code.** Which IdP do customers run, and can it emit an app-scoped groups claim? Everything below about org separation bottoms out here. |
+| OZL-292 | Filed, unstarted. Three verified gaps left by OZL-219 — none widens network reach. Self-contained. |
+| OZL-224, OZL-227 | Verification, not construction, and now cheap (see the run command above). |
+| OZL-228 | The post-OZL-239 sandbox work. The log entry says it is *cheaper* than the ticket estimates. |
+| OZL-231 | Security audit. Highest-priority open item; fold OZL-292 into it or resolve that first. |
+
+**Two claims deliberately NOT made, which a fresh session should not assume:**
+
+- **Org separation is proven to *exclude*, not to *include*.** An org-less viewer sees no org-tagged
+  public collection, with a private-collection negative control proving the filter is org-driven.
+  Nobody has yet shown a viewer *with* org A seeing A's collection and not B's — that needs a user
+  whose org resolves, which needs an IdP (OZL-222).
+- **Nothing has been driven through a browser.** All the verification above runs over the real RPC
+  API against the real stack: gating and policy behaviour, not rendering.
+
+
 
 **~~OZL-291~~ — done (PR #72, `5d68cb0`).** Org separation Phase 3b. `ENABLE_ORG_SEPARATION` can
 now be enabled without every public Context collection vanishing. The decision it was blocked on:
@@ -196,9 +227,10 @@ mutual-exclusion test stayed green throughout, because "two builders never overl
 does not crash" are different properties. **Run the gate on the merge commit, not just on the
 branch.**
 
-**Cheapest first: OZL-224, 226, 227.** Three verification issues — doc/sheet/deck, admin dashboard,
-sharing — each verification rather than construction. Note OZL-226 has one real gap inside it:
-session bounds have no admin UI.
+**Cheapest first: OZL-224 and OZL-227** — doc/sheet/deck and sharing, each verification rather than
+construction. (OZL-226 was the third and is now done.) Both are far cheaper than they were: the
+instance-var passthrough means a local `--allow none` stack can now be driven as a real admin with
+a real policy, which is what made OZL-226's verification possible at all.
 
 **OZL-219 is mostly already built — read the 2026-08-12 log entry before touching it.** Three of
 its five required controls exist (the per-worker/per-role CIDR allowlist, the `MCP_ALLOW_INSECURE`
@@ -242,8 +274,21 @@ the `groups` scope** (`OIDC_SCOPES=groups`), and **Entra emits group GUIDs by de
 can match, and the name formats exist only on AD-synced groups, so a cloud-only tenant must use App
 Roles.
 
-What remains of OZL-222 is *verification against a live IdP*. Tier 2 drives a stub, so nothing here
-proves a real Keycloak signs someone in — the same gap OZL-225 closed for inference.
+**The signature path is now tested against real signed tokens** (2026-08-16). `verifyIdToken` — the
+function deciding whose email the Workshop trusts — had **zero** coverage: `identity.test.ts`
+exercises `identityFromClaims`, which takes *already-verified* claims, and `discoverEndpoints`,
+which takes an injected fetch. Everything in between was never executed by a test.
+
+`verify-id-token.test.ts` signs RS256 tokens with a generated key and serves a real JWKS, so
+`jwtVerify` does the same work it does against Keycloak. It pins that a token signed by another
+key, from another issuer, for another audience, expired, or with `email_verified: false` is all
+rejected — and that a trailing slash on the configured issuer does not break the `iss` comparison,
+since operators paste it both ways. RED-checked: dropping the audience check fails exactly one test.
+
+**What still remains is a live IdP.** A signing stub proves our verification logic; it does not
+prove a real Keycloak's discovery document, claim names and group mapper behave as expected end to
+end. That is the same gap OZL-225 closed for inference, and the OZL-225 lesson is the reason the
+stub here *signs* rather than merely returning fixtures: a permissive stand-in proves nothing.
 
 ## Traps that have already cost time
 
