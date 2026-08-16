@@ -126,9 +126,15 @@ belongs to the identity provider, so the session bounds below do not apply to it
 | `SESSION_MAX_LIFETIME_HOURS` | `12` | Ceiling on absolute session lifetime, from sign-in. Never extended by activity. |
 | `SESSION_MAX_IDLE_MINUTES` | `60` | Ceiling on the idle window, refreshed by user-driven activity. |
 
-Both are **ceilings**. An admin may configure shorter values; anything longer is clamped, and
-lowering a ceiling tightens existing deployments immediately without rewriting stored config. A
-non-positive or unparseable value falls back to the default — `0` never means "no expiry".
+Both are **ceilings**. An admin configures shorter values from **Admin → Access → Session bounds**;
+anything longer is clamped, and lowering a ceiling tightens existing deployments immediately without
+rewriting stored config. A non-positive or unparseable value falls back to the default — `0` never
+means "no expiry".
+
+The panel shows three numbers per bound — the ceiling, what the admin chose, and what is actually in
+force — because clamping happens when the policy is read, not when it is saved. So a stored value
+above the ceiling stays stored (raising the ceiling later restores the admin's intent) while not
+being in effect, and lowering the ceiling changes what is in force without touching what was saved.
 
 Defaults suit a classified-network deployment, where accreditation regimes generally expect idle
 timeouts in the tens of minutes and re-authentication at least daily. Raise them for a
