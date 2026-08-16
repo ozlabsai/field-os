@@ -10,9 +10,31 @@
  * The theme itself is shared because the diff editor and the regular editor
  * should look identical when displaying the same file; the diff editor only
  * adds line-level decorations on top.
+ *
+ * This module also pins Monaco itself to the local bundle (see below), because
+ * it is the one thing both editors already import.
  */
 
+import { loader } from '@monaco-editor/react'
+import * as monaco from 'monaco-editor'
 import type { ResolvedThemeMode } from '../theme'
+
+// Load Monaco from our own bundle instead of a CDN (OZL-293).
+//
+// `@monaco-editor/react` defaults to fetching Monaco from jsDelivr at runtime, by injecting a
+// script tag. On an airgapped deployment that request simply fails and the code editor never
+// appears -- and because the URL lives in the dependency's default config rather than in our
+// source, no amount of grepping `src/` reveals it. It is visible only in built output.
+//
+// Configuring the loader with an imported `monaco` makes Vite bundle it, so there is no runtime
+// fetch at all. This runs at module scope, before either editor mounts, and must happen before
+// the first `<Editor>` renders -- which is why it lives here, in the module both editors already
+// import, rather than in a component body.
+//
+// Deliberately NOT in main.tsx: that would pull Monaco (several MB) into the entry chunk for every
+// user, including those who never open a gadget. Here it rides the editors' own lazily-loaded
+// chunk, so the cost lands when an editor actually opens.
+loader.config({ monaco })
 
 export const GADGETS_CODE_THEME_LIGHT = 'gadgets-code-light'
 export const GADGETS_CODE_THEME_DARK = 'gadgets-code-dark'

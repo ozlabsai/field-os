@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "echo \"run 'pnpm dev-server' in the root directory instead\" >&2 && exit 1",
     "deploy": "pnpm run build:app && wrangler deploy",
-    "build:app": "node build-app.mjs",
+    "build:app": "node build-app.mjs && node ../workshop-frontend/scripts/check-airgap-bundle.mjs src/generated/app.txt",
     "build:app:watch": "node build-app.mjs --watch",
     "typecheck:app": "tsc -p tsconfig.app.json && tsc -p tsconfig.vite.json",
     "types:check": "pnpm run typecheck:app && pnpm run build:app && tsc --noEmit",
