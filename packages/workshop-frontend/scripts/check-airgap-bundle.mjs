@@ -12,10 +12,14 @@
 // which is why each entry below records WHY it is inert. Anything new must be justified the same
 // way, or fixed.
 
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-const DIST = new URL("../dist/", import.meta.url).pathname;
+// Targets default to this package's own build output; pass paths (a directory or a single bundled
+// file) to check another package's. The gatekeeper management UIs bundle separately and ship as a
+// single `app.txt`, so they need the file form.
+const targets = process.argv.slice(2);
+if (targets.length === 0) targets.push(new URL("../dist/assets/", import.meta.url).pathname);
 
 // Hosts that appear in the bundle as inert strings, each with the reason it cannot cause a fetch.
 const ALLOWED = new Map([
@@ -34,11 +38,21 @@ const ALLOWED = new Map([
   ["developers.cloudflare.com", "documentation links"],
   ["kumo.cfops.it", "component-library documentation links"],
   ["...", "literal placeholder text in an API URL input field"],
-  // Unreachable dead config, verified by execution rather than by reading: `loader.config({monaco})`
-  // in monacoTheme.ts makes `loader.init()` resolve from the local bundle with ZERO script tags
-  // injected. Without that call `init()` never resolves at all -- which was OZL-293. The default
-  // constant remains in the dependency's code; nothing reads it.
-  ["cdn.jsdelivr.net", "@monaco-editor/loader default config, superseded by loader.config({monaco})"],
+  // Reached by TWO dependencies, both superseded by locally-supplied data. Neither fetches.
+  //
+  //   * `@monaco-editor/loader` -- its default config points here. `loader.config({monaco})` in
+  //     monacoTheme.ts supersedes it: verified by execution, `init()` resolves from the local
+  //     bundle with ZERO script tags injected, and WITHOUT that call it never resolves at all
+  //     (OZL-293).
+  //   * `emoji-mart` in the Context Library UI -- falls back to jsDelivr for emoji data and for
+  //     i18n. Both are bypassed: `data: emojiData` is passed from the locally imported
+  //     `@emoji-mart/data`, and the i18n fetch only fires for a non-`en` locale, which nothing
+  //     configures.
+  //
+  // Both remain as dead constants in compiled dependency code. If either local supply is ever
+  // removed, the fetch silently comes back -- and this allowlist entry would hide it, so check
+  // both call sites before trusting this line.
+  ["cdn.jsdelivr.net", "dead fallback in @monaco-editor/loader and emoji-mart; both supplied locally"],
   // Unreachable dead config, verified by execution rather than by reading: `loader.config({monaco})`
   // in monacoTheme.ts makes `loader.init()` resolve from the local bundle with ZERO script tags
   // injected. Without that call `init()` never resolves at all -- which was OZL-293. The default
@@ -46,10 +60,21 @@ const ALLOWED = new Map([
   
 ]);
 
-const files = (await readdir(join(DIST, "assets"))).filter(f => f.endsWith(".js") || f.endsWith(".css"));
+// Expand each target to the list of files to scan.
+const files = [];
+for (const target of targets) {
+  if ((await stat(target)).isDirectory()) {
+    for (const name of await readdir(target)) {
+      if (name.endsWith(".js") || name.endsWith(".css")) files.push(join(target, name));
+    }
+  } else {
+    files.push(target);
+  }
+}
+
 const found = new Map();
 for (const file of files) {
-  const text = await readFile(join(DIST, "assets", file), "utf8");
+  const text = await readFile(file, "utf8");
   for (const [, host] of text.matchAll(/https?:\/\/([a-zA-Z0-9._-]+)/g)) {
     if (!ALLOWED.has(host)) found.set(host, file);
   }
@@ -57,7 +82,7 @@ for (const file of files) {
 
 if (found.size > 0) {
   console.error("Airgap check failed: unrecognized external host(s) in the built bundle.\n");
-  for (const [host, file] of found) console.error(`  ${host}  (in assets/${file})`);
+  for (const [host, file] of found) console.error(`  ${host}  (in ${file})`);
   console.error(`
 A deployment with no internet route cannot reach these. Either:
   * the code genuinely fetches it -- bundle it locally instead (see monacoTheme.ts), or
@@ -68,4 +93,4 @@ Do not add an entry without checking which it is.`);
   process.exit(1);
 }
 
-console.log(`Airgap check passed: ${files.length} bundled files, no unrecognized external hosts.`);
+console.log(`Airgap check passed: ${files.length} bundled file(s), no unrecognized external hosts.`);
