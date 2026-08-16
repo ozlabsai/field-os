@@ -101,10 +101,31 @@ Three things worth not re-deriving:
    already runs in the user's own DO, so it is a storage read rather than a round-trip. Unlike the
    ambient session, that one is the *caller's* org, not the owner's.
 
-**IN FLIGHT: OZL-226, admin dashboard.** Session bounds shipped (PR #73, `1153660`); the org
-read-out is PR #74. The ticket stays **open** — merging #73 auto-closed it and it was reopened,
-because the remaining verification needs a *running stack*, not a code read: admin-only gating on
-standalone workerd, and the Gatekeepers three-state mode against connectors with no internet route.
+**~~OZL-226~~ — verified on a real airgapped stack.** Session bounds (PR #73), the org read-out
+(PR #74), and the verification itself, all done. The last of it ran on standalone workerd with
+**`--allow none`** — egress fully blocked, not approximated:
+
+| | |
+|---|---|
+| SPA + hashed assets | 200, served locally |
+| API | `/api` → 101, a real Cap'n Web session |
+| admin-only gating | a user in `ADMINS` gets the capability; another gets `null` |
+| session bounds | tightening applies; **720h clamped to the 8h env ceiling**; the stored value is kept; clearing inherits |
+| Gatekeepers three-state | disabled / enabled / optional all resolve with no internet route |
+| Monaco (OZL-293) | the 3.6 MB chunk is served **by the deployment**, closing that ticket's open caveat |
+| egress | **zero** `restrictPeers` / DNS-failure lines across the whole run |
+
+**The blocker was tooling, not testing, which is why this sat unverified so long.**
+`run-workerd.mjs` read exactly one env var (`FIELDOS_INTERNAL_HOSTS`), so `ADMINS` was always unset
+locally — every user was a non-admin and the admin panel could not be exercised *at all*. It now
+forwards a named list of backend instance vars from the process environment:
+
+```sh
+ADMINS='["alice"]' SESSION_MAX_LIFETIME_HOURS=8 node scripts/run-workerd.mjs --allow none
+```
+
+That also makes `ENABLE_ORG_SEPARATION` settable locally, so OZL-291's flag can finally be exercised
+on a real stack rather than reasoned about.
 
 **A correction to OZL-226's own text, verified — do not re-derive.** It says the UI must "reject or
 clamp anything above" the session ceiling. **Rejecting server-side would have been wrong.**
@@ -255,6 +276,14 @@ Each of these looked like success while being wrong. That is what makes them wor
 - **`uniqueKey` values are permanent.** They become the on-disk directory name and there is no
   migration mechanism. `run-workerd.mjs` persists them in `.workerd/keys.json` — do not regenerate.
 - **`SIGTERM` is ignored by a wedged workerd.** Go straight to `SIGKILL`.
+- **A stale `workerd serve` serves the OLD config, and it looks exactly like a product bug.**
+  Verifying admin gating, `getAdminApi()` returned null for a username definitely in `ADMINS`. The
+  cause was a previous instance still holding port 8080, serving a config generated *before*
+  `ADMINS` was passed — so the test exercised a binary that could not possibly pass. It cost a
+  whole tier-1 probe chasing `DurableObjectId.name` before process identity was checked. This is
+  the orphaned-workerd trap below wearing a different mask: **run `pgrep -f "workerd serve" | wc -l`
+  BEFORE interpreting any local-stack result**, not after it fails. More than one means whatever
+  you just measured is untrustworthy.
 - **A guard is not covered by the run that made it pass.** Extending the airgap check to the
   gatekeeper *configurator* bundles, it reported all ten clean — and was structurally incapable of
   seeing anything in them. Those UIs are inlined into a `data:` URL, so `https://` is stored as
