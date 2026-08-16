@@ -255,6 +255,14 @@ Each of these looked like success while being wrong. That is what makes them wor
 - **`uniqueKey` values are permanent.** They become the on-disk directory name and there is no
   migration mechanism. `run-workerd.mjs` persists them in `.workerd/keys.json` — do not regenerate.
 - **`SIGTERM` is ignored by a wedged workerd.** Go straight to `SIGKILL`.
+- **A guard is not covered by the run that made it pass.** Extending the airgap check to the
+  gatekeeper *configurator* bundles, it reported all ten clean — and was structurally incapable of
+  seeing anything in them. Those UIs are inlined into a `data:` URL, so `https://` is stored as
+  `https%3A%2F%2F` and the regex matched nothing. The first fix silently failed too: decoding the
+  whole file throws (stray `%`), and the fallback scanned raw text, so it still passed. Only a
+  planted host proved it. **Whenever you add a check, plant the thing it is meant to catch and
+  watch it go red — in every input format it will meet**, not just the one you developed against.
+  A check that cannot fail reads as coverage, which is worse than no check.
 - **An airgap check that greps `src/` is not an airgap check.** The gadget code editor loads Monaco
   from **jsDelivr** and cannot work on an airgapped network (OZL-293, Urgent). The URL never appears
   in our source — it arrives inside `@monaco-editor/loader`'s default config and is only visible
