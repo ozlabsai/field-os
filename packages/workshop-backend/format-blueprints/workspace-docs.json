@@ -9,6 +9,6 @@
     "plural": "Docs",
     "icon": "fileText"
   },
-  "author": { "type": "user", "name": "Cloudflare", "id": "agent@cloudflare.com" },
+  "author": { "type": "user", "name": "FieldOS", "id": "agent@fieldos.local" },
   "revision": 4
 }

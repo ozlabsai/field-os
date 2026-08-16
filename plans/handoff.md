@@ -381,9 +381,23 @@ Each of these looked like success while being wrong. That is what makes them wor
   accumulate. Neither a tier-1 nor a tier-2 file leaks when run alone, so it is a race under
   concurrency, not a missing `stop()` on one path. They cost real CPU: the same `pnpm gate` that
   takes ~150s idle took **4670s** on a machine carrying that backlog. Check with
-  `pgrep -f "workerd serve" | wc -l` before trusting any timing measurement, and
-  `pkill -9 -f "workerd serve"` between runs. Untriaged — it makes benchmarks lie, not the suite
+  `pgrep -f "workerd/bin/workerd serve" | wc -l` before trusting any timing measurement, and
+  kill **the supervisor first** between runs. Untriaged — it makes benchmarks lie, not the suite
   fail.
+- **Killing `workerd serve` does not stop a `run-workerd.mjs` stack, and `pgrep -f "workerd serve"`
+  over-counts.** Two corrections to the line above, both found the slow way on 2026-08-16. The
+  supervisor (`node scripts/run-workerd.mjs`) keeps holding port 8080 after its child dies, so
+  backgrounded runs accumulate — **six** were alive at once, the oldest 3h49m. A new run then logs
+  `Address already in use; toString() = *:8080` while the *old* stack keeps answering `GET /`, so
+  what you measure is not the config you just generated. Separately, that `pgrep` pattern matches
+  the zsh wrapper whose command line contains the string, so it reports processes that are not
+  workerd. Tear down in this order, and confirm all three are zero before trusting any result:
+
+  ```sh
+  pkill -9 -f "run-workerd.mjs"            # supervisors first
+  pkill -9 -f "workerd/bin/workerd serve"  # then real binaries (note the path)
+  lsof -ti:8080 | xargs -r kill -9
+  ```
 - **Three inherited GitHub workflows could never pass here, and were deleted.** `cla.yml` checked
   signatures against *Cloudflare's* CLA via a `cla-signatures` branch that does not exist on this
   fork; `bonk.yml` and `bonk-pr.yml` needed `CLOUDFLARE_ACCOUNT_ID`/`GATEWAY_ID`/`API_TOKEN`
