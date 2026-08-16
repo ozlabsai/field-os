@@ -819,6 +819,35 @@ export type AdminSettingsView = {
   resourceVendors: AdminResourceVendor[];
   // The blueprints promoted as standard output formats, in menu order (including disabled ones).
   formats: AdminFormat[];
+  /** Session bounds: what the admin has chosen, and the deployment ceiling they sit under. */
+  sessionBounds: AdminSessionBounds;
+};
+
+/**
+ * Session bounds as the admin panel sees them.
+ *
+ * Three numbers rather than one, because the stored value and the value actually in force are not
+ * the same thing: `resolveSessionPolicy` clamps at *read* time, so lowering the env ceiling tightens
+ * every session without rewriting config. A panel that echoed back only what was saved would
+ * therefore display a number that is not in effect.
+ *
+ * The ceiling comes from `SESSION_MAX_LIFETIME_HOURS` / `SESSION_MAX_IDLE_MINUTES`, which are env
+ * vars precisely so a compromised admin session cannot raise them — an admin may only tighten
+ * below. See auth/session-policy.ts.
+ */
+export type AdminSessionBounds = {
+  /** Ceiling in hours, from env. The admin's value can never exceed this. */
+  ceilingLifetimeHours: number;
+  /** Ceiling in minutes, from env. */
+  ceilingIdleMinutes: number;
+  /** The admin's chosen absolute lifetime, or undefined when they have set none (⇒ the ceiling). */
+  lifetimeHours?: number;
+  /** The admin's chosen idle window, or undefined when they have set none (⇒ the ceiling). */
+  idleMinutes?: number;
+  /** What is actually in force: the admin's choice clamped to the ceiling. */
+  effectiveLifetimeHours: number;
+  /** What is actually in force for the idle window. */
+  effectiveIdleMinutes: number;
 };
 
 // One promoted blueprint, as the admin Formats panel sees it: the deployment's curation plus
@@ -903,6 +932,17 @@ export interface AdminApi {
   // Set the deployment accent color (hex, e.g. "#3b82f6"). Pass "" to reset to the default theme.
   // Rejects an invalid hex color.
   setAccentColor(color: string): Promise<void>;
+
+  /**
+   * Set the session bounds an admin may tighten to. Pass undefined for either to clear it and fall
+   * back to the deployment ceiling.
+   *
+   * Values above the ceiling are accepted and clamped on read rather than rejected here — that is
+   * what lets an operator lower the env ceiling and have it take effect immediately, instead of
+   * failing closed against a stale stored value. The panel prevents entering one; this is the
+   * backstop, not the control.
+   */
+  setSessionBounds(lifetimeHours?: number, idleMinutes?: number): Promise<void>;
 
   // Returns whether the blueprint is featured on the deployment. Returns null when the blueprint
   // can't be featured (e.g. it isn't a listable blueprint).

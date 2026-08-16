@@ -8,6 +8,7 @@ import { createWorkshopLogger } from "./observability";
 import { ADMIN_CONFIG_KEY, FEATURED_BLUEPRINTS_KEY, isReservedBlueprintKey, parseBlueprintKvRecord, readBlueprintKvRecord, sanitizeBlueprintOutput, serializeFeaturedBlueprints } from './blueprint-archive.js';
 import { AdminConfig, DEFAULT_ADMIN_CONFIG, FormatCuration, MAX_AGENT_HINT, defaultOutputFormatId, listPromotedFormats, reorderFormats, sanitizeOutputOverrides, serializeAdminConfig } from './admin-config.js';
 import { SITE_LOGO_R2_KEY, siteLogoImage, validateSiteLogo } from './site-logo.js';
+import { sessionBoundsView } from './auth/session-policy.js';
 import { ambientGatekeeperMode, DEFAULT_AMBIENT_GATEKEEPER_MODE } from './provisioning-policy.js';
 import { buildGatekeeperVendorMap } from './auth/auth-vendors.js';
 import { UserDurableObject } from './user.js';
@@ -311,8 +312,10 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
       accentColor: config.accentColor,
       resourceVendors: await this.#listResourceConfig(config, adminUserId),
       formats: await this.#listFormatConfig(config),
+      sessionBounds: sessionBoundsView(this.env, config),
     };
   }
+
 
   // --- Standard output formats ---
 
@@ -611,6 +614,21 @@ export class AdminApiImpl extends RpcTarget implements AdminApi {
       throw new Error(`Invalid banner color: ${color}`);
     }
     await this.admin.updateAdminConfig({ banner: { text, color } });
+  }
+
+  async setSessionBounds(lifetimeHours?: number, idleMinutes?: number): Promise<void> {
+    // Positive-or-cleared is the only rule enforced here. Above-ceiling values are deliberately
+    // NOT rejected: admin-config.ts sanitizes to undefined and resolveSessionPolicy clamps on
+    // read, which is what makes lowering the env ceiling take effect immediately rather than
+    // failing against a stale stored value.
+    for (let [name, value] of [["lifetime", lifetimeHours], ["idle", idleMinutes]] as const) {
+      if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+        throw new Error(`Session ${name} must be a positive number, or empty to use the ceiling.`);
+      }
+    }
+    await this.admin.updateAdminConfig({
+      sessionLifetimeHours: lifetimeHours, sessionIdleMinutes: idleMinutes,
+    });
   }
 
   async setAccentColor(color: string): Promise<void> {
