@@ -133,8 +133,8 @@ OZL-219 lists this as a required compensating control and it was not delivered. 
 described there as "likely immediate", so this is a **gap, not an acceptance**: a deployment whose
 internal services use a private CA cannot currently be reached over HTTPS by any connector.
 
-Tracked as future work in `plans/fieldos.md:206`. **This item blocks any deployment with an internal
-PKI** and should be resolved rather than signed away.
+Tracked as **OZL-300**. **This item blocks any deployment with an internal PKI** and should be
+resolved rather than signed away.
 
 ---
 
@@ -184,26 +184,37 @@ verified.
 
 ---
 
-## 6. Blueprints unauthenticated by id (OZL-223) — OPEN DECISION
+## 6. Blueprints — FIXED: authentication now required
 
-**Confirmed.** `getBlueprint` and `downloadBlueprint` are declared on `PublicApi`
-(`packages/workshop-shared/src/api.ts:106,110`) — the unauthenticated surface. The doc comment at
-`:104-105` states the design intent outright: *"No authentication required (knowing the ID is
-sufficient, since a blueprint is 'just data')."* Verified: neither implementation
-(`server.ts:852-871`) performs any auth check, and `/blueprint-screenshot/` is likewise
-unauthenticated (`router/src/index.ts:31-33`, `server.ts:678-694`).
+**Was:** `getBlueprint` and `downloadBlueprint` sat on `PublicApi`, reachable by id alone. The doc
+comment stated the intent outright: *"No authentication required (knowing the ID is sufficient,
+since a blueprint is 'just data')."*
 
-They never call `open()`, so **org separation does not apply to them** — verified: the only
-enforcement predicate is `isOrgAccessPermitted`, with exactly two call sites
-(`overseer.ts:6644`, `:6754`), neither on this path.
+That reasoning does not hold, for a reason the audit found rather than assumed: **the ids are not
+uniformly capability-grade.** User-published blueprints get a high-entropy DO-derived id, but the
+shipped format blueprints are literally `format.document`, `format.spreadsheet` and `format.slides`
+— guessable by anyone. So "knowing the id" could not be relied on as the authorization, and the
+deployment's own blueprint set was anonymously enumerable. That is an insecure direct object
+reference (OWASP A01 Broken Access Control).
 
-This is a **decision, not a defect** (OZL-223), and it needs the customer's answer: a blueprint is a
-snapshot of a workspace's code, so in a deployment where "what Legal is working on" is itself
-sensitive, an unauthenticated fetch by id is a real leak.
+**Now:** both methods moved to `AuthenticatedApi`. A blueprint link shows the sign-in wall first.
 
-**This item requires a decision before sign-off. Do not sign it as accepted without one.**
+Scoped deliberately narrowly. Blueprints remain **deployment-wide** — any signed-in user may read
+any blueprint, including across orgs. That is the ticket's own "middle option": it closes the
+anonymous hole without needing a new field, admin UI and migration for existing blueprints. Whether
+blueprints should additionally be org-scoped is still open, and bottoms out in the same IdP
+dependency as the rest of org separation.
 
----
+**What this cost:** the pre-login blueprint share link. Verified before changing it that the blast
+radius is one route (`blueprint.$id.tsx`) — no server-side rendering, no release-tooling caller, and
+no test asserted anonymous access. `/blueprint-screenshot/` is a separate HTTP path and is
+unaffected, so screenshots are still served unauthenticated.
+
+Pinned by `__integration__/blueprint-auth.test.ts`. Worth recording how that test was arrived at:
+the first two versions **passed against the pre-fix code**, because with the methods restored they
+resolve to `null` in a test deployment with no blueprints installed, and an assertion of "rejects"
+cannot tell that from "absent". It now asserts the rejection *reason* (`'getBlueprint' is not a
+function`), and RED-checks correctly.
 
 ## 7. Context gatekeeper `sharingDomain` — BLOCKS multi-classification deployments
 
@@ -263,8 +274,8 @@ The audit is complete when every row above is signed or resolved. As of 2026-08-
 | 1. `global_fetch_strictly_public` | No acceptance needed — not disabled anywhere |
 | 2. SSRF review + redirect artifact | Artifact exists; `webFetch` gap pinned by test — **needs signature** |
 | 3. HomeAssistant host check | **Needs signature** |
-| 4. Private-CA TLS | **GAP — resolve, do not sign** |
+| 4. Private-CA TLS | **GAP — resolve, do not sign** (OZL-300) |
 | 5. Prompt-injection framing | **Fixed** during this audit — residual scope needs signature |
-| 6. Blueprints unauthenticated | **Needs a decision** (OZL-223) |
+| 6. Blueprints unauthenticated | **Fixed** — authentication now required; org scoping still open |
 | 7. `sharingDomain` | **Needs signature**, and blocks multi-classification deployments |
 | 8. Scope boundaries | Stated, no signature required |
