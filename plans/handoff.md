@@ -84,6 +84,11 @@ server rejects, so the inference bug was invisible against it. The servers custo
 | OZL-243 | **Upstream sync established** — the weekly watcher, and `b2a51b5` ported through the gate |
 | OZL-256 | **The gate made deterministic** — a per-package build lock; 6/6 green |
 | OZL-254 | Answered: dynamic workers, DOs and facets are workerd-native; only `browser` needs a substitute |
+| OZL-216 | Org separation Phase 2 — enforcement behind `ENABLE_ORG_SEPARATION` |
+| OZL-217 | Org separation Phase 3 — the agent read path scoped |
+| OZL-291 | **Phase 3b** — public collections tagged and the UI/write paths scoped; the flag is now usable |
+| OZL-226 | **Admin dashboard verified airgapped** — session bounds and the org read-out built, then exercised on a live `--allow none` stack |
+| OZL-293 | **The code editor loaded Monaco from a CDN** and could not work airgapped; fixed, with a build-time guard over bundled output |
 
 ## What to pick up next
 
