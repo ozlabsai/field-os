@@ -1198,3 +1198,71 @@ handoff rather than guessed at: admins are deployment-wide and flat and need not
 so "which org tags an admin-created public collection" is a policy question, not an implementation
 detail. With the flag on and nothing writing `orgId`, every public collection currently fails
 closed — safe, and unusable until tagging exists.
+
+## 2026-08-16 — The airgap claims, actually executed
+
+Five PRs merged (#72, #73, #74, #76, #77) plus #79. OZL-291, OZL-226 and OZL-293 closed; OZL-292
+filed; OZL-294 filed and canceled the same day. What follows is what the session *learned*, not what
+it shipped — the tickets carry the latter.
+
+### The pattern: every fix unlocked the next verification
+
+OZL-226's verification had been deferred for a week, and the reason turned out not to be effort.
+`run-workerd.mjs` read exactly one env var (`FIELDOS_INTERNAL_HOSTS`), so `ADMINS` was always unset
+locally — meaning `#isAdmin()` denied everyone and **the admin panel was unreachable by
+construction**. Not a missing test; missing tooling. One passthrough commit made admin gating,
+session-bound clamping and the Gatekeepers three-state mode all testable, and then made
+`ENABLE_ORG_SEPARATION` settable, which made OZL-291's boundary demonstrable for the first time.
+
+Worth generalizing: **when a verification keeps being deferred, check whether it is possible before
+assuming it is merely unfinished.**
+
+### Four corrections to work done in the same session
+
+Each would have shipped as a false green:
+
+1. **The airgap guard could not fail.** Extending it to the gatekeeper configurator bundles, it
+   reported ten files clean while structurally unable to see anything in them — those UIs are
+   percent-encoded inside a `data:` URL, so `https://` reads as `https%3A%2F%2F`. The *first* fix
+   silently failed too: decoding the whole file throws on stray `%`, and the fallback scanned raw
+   text. Only planting a host revealed it.
+2. **The instance-var passthrough reached one worker of two.** `ENABLE_ORG_SEPARATION` is read by
+   the backend *and* by `gatekeeper-context`'s own `org-scoping.ts`. Forwarding it to only the
+   backend half-enforces the boundary while looking correct — the worst possible test result.
+3. **OZL-294 was filed and canceled the same day.** `shouldAutoProvisionAccount` gates on mode
+   `enabled`; the documented default is `optional`, so an empty `listGatekeeperApps()` for a fresh
+   user is correct behaviour. The probe assumed auto-provisioning by default. The wrong premise is
+   left visible in the ticket, since that is the useful part.
+4. **Three non-zero exits were environmental, not defects** — load-starvation timeouts, a task
+   wrapper reporting its own exit code rather than the command's, and a working-directory slip.
+
+### The finding that was not in any ticket
+
+**The gadget code editor could not load airgapped at all** (OZL-293, Urgent). `@monaco-editor/react`
+fetched Monaco from jsDelivr by injecting a script tag. The URL is nowhere in our source — it lives
+in a dependency's default config and is visible only after bundling, which is why two earlier
+source-level airgap audits, including one from this session, missed it.
+
+Verified by execution rather than by reading minified code: with `loader.config({monaco})`,
+`init()` resolves from the local bundle with **zero** script tags injected; without it, `init()`
+**never resolves** — exactly the reported symptom.
+
+### What is verified, and what is still assumed
+
+Executed on standalone workerd with **`--allow none`**: admin gating, session-bound clamping (720h
+→ the 8h ceiling, stored value retained), the Gatekeepers three-state mode, Monaco served locally,
+and **zero** attempted outbound connections across the whole run.
+
+The org boundary is proven to **exclude**: an org-less viewer sees no org-tagged public collection,
+with a private-collection negative control proving the filter is org-driven rather than a broken
+listing. It is **not** proven to include — a viewer whose org resolves needs an IdP (OZL-222).
+Nothing has been driven through a browser; all of the above runs over the real RPC API.
+
+### On OZL-222
+
+The connector was made correct against Keycloak, Okta and Entra as they actually ship, and
+`verifyIdToken` — which had **zero** coverage despite deciding whose email the Workshop trusts — is
+now tested against real RS256-signed tokens and a real JWKS. The stub *signs* rather than returning
+fixtures, deliberately: OZL-225 showed that a permissive stand-in proves nothing.
+
+The per-customer question the ticket actually asks remains unanswered and is unanswerable from here.
