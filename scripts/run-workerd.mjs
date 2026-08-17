@@ -15,7 +15,7 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import {
-  existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -288,6 +288,16 @@ for (const pkg of included) {
 
   const config = readWranglerConfig(pkg.dir);
   const { mainModule, modules } = collectModules(outDir);
+
+  // Remove the generated `.wrangler/validate/` tree the dry-run left behind. `collectModules`
+  // reads the relocated `--outdir`, so nothing below needs it.
+  //
+  // It must not outlive this build: the tree is generated for wrangler's bundler, not for the
+  // package's own tsconfig, so a later `tsc`/`types:check` compiles it and fails with TS2345 on
+  // `targetKind`. Because `pnpm test` reaches this code, a test run used to leave eight packages
+  // in that state and the *next* `pnpm build` failed -- green CI (clean checkout, no leftovers),
+  // red locally, on the same commit. `build-release.mjs` cleans up for the same reason.
+  rmSync(join(pkg.dir, ".wrangler", "validate"), { recursive: true, force: true });
   workers.push({ pkgName: pkg.name, config, mainModule, modules, outDir });
 }
 

@@ -130,9 +130,23 @@ function main() {
     // build command share one fixed `.wrangler/validate/` per package, which is emptied before it
     // is rewritten (OZL-256, see build-lock.mjs). This loop is serial, so it never races itself --
     // the lock is what keeps it from tearing against a concurrent test run or generator.
-    withBuildLock(pkg.dir, () =>
-        run("pnpm", ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outDir],
-            { cwd: pkg.dir }));
+    withBuildLock(pkg.dir, () => {
+      run("pnpm", ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outDir],
+          { cwd: pkg.dir });
+      // Remove the generated `.wrangler/validate/` tree this dry-run left behind.
+      //
+      // `capnweb-validate` normally cleans up after itself -- `pnpm types:check` generates the
+      // tree, compiles, and removes it -- but the wrangler dry-run does not, so a release build
+      // leaves four generated .ts files per package sitting in the source tree. They are built
+      // for wrangler's bundler, not for the package's own tsconfig, so the *next* `types:check`
+      // compiles them and fails with TS2345 on `targetKind`. That is a green CI and a red local
+      // build on the same commit, which is exactly what happened on 2026-08-17.
+      //
+      // Cleaning here rather than teaching tsconfig to ignore the path: `main` in wrangler.jsonc
+      // legitimately points into this tree, so it is a real build input, not something to
+      // permanently exclude. It just must not outlive the build that made it.
+      rmSync(join(pkg.dir, ".wrangler", "validate"), { recursive: true, force: true });
+    });
     const { mainModule, modules } = collectModules(outDir);
     for (const mod of modules) {
       writeFileSync(join(args.out, "modules", mod.sha256), mod.bytes);

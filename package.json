@@ -1,6 +1,6 @@
 {
-  "name": "cloudflare-os",
-  "version": "1.0.0",
+  "name": "fieldos",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72",
@@ -16,7 +16,8 @@
     "types:check": "pnpm run --recursive --if-present types:check",
     "lint": "pnpm run lint:check && pnpm run types:check",
     "types:generate": "node scripts/generate-worker-types.mjs",
-    "gate": "pnpm run lint && pnpm run test"
+    "gate": "pnpm run lint && pnpm run test",
+    "gate:release": "pnpm run gate && pnpm run build && node scripts/release/verify-reproducible.mjs"
   },
   "devDependencies": {
     "aws4fetch": "^1.0.20",

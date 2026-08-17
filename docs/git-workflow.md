@@ -68,6 +68,20 @@ pnpm lint          # oxlint + recursive tsc --noEmit
 pnpm test
 ```
 
+**`pnpm gate` does not compile.** It is lint + test; `pnpm build` runs only in CI. That gap is real
+and has bitten: on 2026-08-17 `pnpm build` failed locally on `gatekeeper-oidc` while CI was green on
+the same commit, because a stale gitignored `.wrangler/validate/` tree survived locally and CI
+always checks out clean. Before anything release-shaped, run:
+
+```bash
+pnpm gate:release  # gate + build + a twice-built, byte-identical release manifest
+```
+
+`scripts/release/verify-reproducible.mjs` builds the release twice — the second time *over* the
+first build's output, which is what a developer's machine looks like and what CI structurally
+cannot reproduce. If the two manifests differ, the release id names something ambiguous. In CI it
+runs on `main` and `release/*` only, since it doubles a full release build.
+
 Narrow it while iterating:
 
 ```bash
@@ -171,6 +185,17 @@ git checkout main && git merge --no-ff feat/my-thing
 
 Delete the branch after merging. `git branch -d` (lowercase) refuses to delete unmerged work;
 prefer it to `-D`.
+
+## Versioning
+
+The root `package.json` carries the product version, currently `0.1.0-alpha.1`. Semver with a
+prerelease tag: `0.x` says the public surface is not yet stable, and `-alpha.N` counts iterations
+within a milestone. Tag a release commit `v<version>` (`v0.1.0-alpha.1`).
+
+**A release id is not a version.** `scripts/release/build-release.mjs` mints
+`r<pipeline>-<sha7>` (or `dev-<timestamp>` locally) to name *a build*; the version names *a
+product state*. One version can be built many times, and the content-addressed store keys on the
+release id, so the two must not be conflated. Never reuse a release id.
 
 ## Upstream
 
