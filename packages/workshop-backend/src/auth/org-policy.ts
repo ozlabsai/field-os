@@ -10,6 +10,9 @@
 // wide, with no redeploy. That is a materially different blast radius from the presentation
 // toggles `AdminConfig` otherwise holds, and it is precisely what the env-var rule exists to stop.
 
+import { AdminOrgSeparation } from "@gadgets/workshop-shared/api";
+import { hasAuthGatekeepers, isPasswordAuthEnabled } from "./config.js";
+
 /**
  * Whether the org boundary is enforced at all. OFF by default, so the enforcement in this file is
  * inert until a deployment opts in.
@@ -86,4 +89,74 @@ export function isOrgAccessAllowed(
   // it wants enforced, and denying an org-less caller while permitting a wrong-org one would be
   // incoherent -- strictly less safe callers would get strictly more access.
   return allowCrossOrg;
+}
+
+/**
+ * Why a deployment's org-separation configuration cannot work as the operator intended.
+ *
+ * `null` means coherent — either separation is off, or it is on with an identity provider that can
+ * actually supply the claim it depends on.
+ *
+ * Not an error type: enforcement stays correct in every case below (it fails closed, which is the
+ * point). This exists because "correct" and "what the operator meant" have come apart, and nothing
+ * in the denial path can say so — a denied collaborator sees the same result whether the boundary
+ * is working or the deployment can never resolve an org for anyone.
+ */
+export type OrgSeparationConfigIssue =
+    /**
+     * Separation is on but no auth gatekeeper is allowlisted, so `orgId` is never written for
+     * anyone (`loginOrCreateViaGatekeeper` in user.ts is the only writer). Every user is
+     * permanently org-less: owners still reach their own workspaces, but no collaborator can open
+     * anyone else's. That is a deployment-wide halt to sharing, configured by accident.
+     */
+    | "no-identity-provider"
+    /**
+     * Separation is on with an IdP, but password auth is also live, so the deployment has two
+     * classes of user: SSO users carrying an org, and password users permanently without one.
+     * Collaboration then works among SSO users and silently fails for everyone else.
+     *
+     * Legitimate if deliberate (break-glass admins, service accounts), which is why this is
+     * reported and not refused — set DISABLE_PASSWORD_AUTH=true to make it go away.
+     */
+    | "password-auth-users-have-no-org";
+
+/**
+ * Diagnose the deployment's org-separation configuration; see {@link OrgSeparationConfigIssue}.
+ *
+ * Deliberately reports rather than refuses. Sign-in has the same shape one layer down —
+ * `isPasswordAuthEnabled` ignores DISABLE_PASSWORD_AUTH when it would strand every user rather
+ * than honouring it — but refusing here would mean an IdP outage could stop the Worker from
+ * booting, trading a sharing outage for a total one. Enforcement already fails closed; what was
+ * missing is anyone being told why.
+ *
+ * @param separationEnabled Whether the org boundary is enforced ({@link isOrgSeparationEnabled}).
+ * @param hasIdentityProvider Whether any auth gatekeeper is allowlisted (`hasAuthGatekeepers`).
+ * @param passwordAuthEnabled Whether username/password login is live (`isPasswordAuthEnabled`).
+ */
+export function diagnoseOrgSeparationConfig(
+    separationEnabled: boolean, hasIdentityProvider: boolean, passwordAuthEnabled: boolean):
+    OrgSeparationConfigIssue | null {
+  if (!separationEnabled) return null;
+  if (!hasIdentityProvider) return "no-identity-provider";
+  if (passwordAuthEnabled) return "password-auth-users-have-no-org";
+  return null;
+}
+
+/**
+ * The admin panel's view of org separation. Mirrors `sessionBoundsView` in session-policy.ts: a
+ * read-only projection of env-driven authorization config, surfaced so an operator can see what is
+ * in force without reading the deployment's env.
+ *
+ * Takes `env` rather than booleans because it is a composition root, not a decision — the pure
+ * predicates above stay env-free so the decision table remains testable without a runtime.
+ */
+export function orgSeparationView(env: Cloudflare.Env): AdminOrgSeparation {
+  const enabled = isOrgSeparationEnabled(env);
+  const issue = diagnoseOrgSeparationConfig(
+      enabled, hasAuthGatekeepers(env), isPasswordAuthEnabled(env));
+  return {
+    enabled,
+    crossOrgSharingAllowed: isCrossOrgSharingAllowed(env),
+    ...(issue ? { issue } : {}),
+  };
 }

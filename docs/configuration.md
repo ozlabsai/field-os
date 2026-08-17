@@ -159,6 +159,29 @@ misconfiguration recoverable rather than a lockout.
 they gate authorization, so they must not be changeable from a compromised admin session — see the
 header of `admin-config.ts`. Changing them takes a deploy.
 
+**Org separation requires an identity provider.** A user's org comes from a sign-in gatekeeper
+claim (`loginOrCreateViaGatekeeper` is the only writer of `orgId`), so a deployment with no
+`AUTH_GATEKEEPERS` assigns an org to nobody. Every user is then permanently org-less: owners still
+reach their own workspaces, but no collaborator can open anyone else's — sharing stops
+deployment-wide, silently, until the flag is cleared.
+
+Password auth is the same problem in miniature. It is enabled by default and stays on unless
+`DISABLE_PASSWORD_AUTH=true` *and* a gatekeeper is allowlisted, so enabling separation on a
+deployment that also offers password login produces two classes of user: SSO users carrying an org,
+and password users permanently without one. That is legitimate for break-glass or service accounts
+and is not blocked — but it should be a choice, not a discovery.
+
+Both conditions are reported in the admin panel under **Access → Org separation**. Neither is
+refused at boot: enforcement already fails closed, and refusing to start would trade a sharing
+outage for a total one.
+
+**A missing claim means no org — never a default org.** This is the one design decision here that
+is easy to get backwards. Above **200 groups (JWT) / 150 (SAML)** Microsoft Entra omits the groups
+claim entirely and substitutes a pointer to Microsoft Graph, which is unreachable from an airgapped
+network. A user in 250 groups would silently land in whichever org the deployment defaulted to.
+Entra deployments **must** be configured to emit only groups assigned to the application. Falling
+back to a default org would convert this authentication failure into a silent authorization grant.
+
 **Read this before turning it on.** Enforcement is reversible by design, but two things are worth
 knowing first:
 
@@ -358,8 +381,6 @@ looping: a gadget that wedges on load would otherwise restart forever. That stat
 
 ## Known gaps
 
-- **No admin UI for session bounds yet.** The `AdminConfig` fields exist and resolve correctly; the
-  dashboard controls arrive with the wider admin panel work. Env vars work today.
 - **Admin revocation targets a named user.** There is no user directory — user objects are
   addressed by name — so "revoke every session globally" is not implementable without building one.
   Worth stating to an accreditation reviewer as a scope boundary.

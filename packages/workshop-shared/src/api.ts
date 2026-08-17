@@ -828,6 +828,35 @@ export type AdminSettingsView = {
   formats: AdminFormat[];
   /** Session bounds: what the admin has chosen, and the deployment ceiling they sit under. */
   sessionBounds: AdminSessionBounds;
+  /** How org separation is configured, and whether that configuration can work. */
+  orgSeparation: AdminOrgSeparation;
+};
+
+/**
+ * Org separation as the admin panel sees it: read-only, because the boundary is env-var driven so
+ * a compromised admin session cannot open it (see auth/org-policy.ts).
+ *
+ * Reported at all because enforcement is invisible when misconfigured. A user's org comes from a
+ * sign-in gatekeeper claim, so a deployment can enable the boundary and resolve an org for nobody;
+ * every denial is then correct, identical to an ordinary one, and permanent. `issue` is the only
+ * place that distinguishes "the boundary is working" from "this deployment can never satisfy it".
+ */
+export type AdminOrgSeparation = {
+  /** Whether the boundary is enforced (`ENABLE_ORG_SEPARATION`). */
+  enabled: boolean;
+  /** Whether collaborators from other orgs may open a workspace (`ALLOW_CROSS_ORG_SHARING`). */
+  crossOrgSharingAllowed: boolean;
+  /**
+   * Why the configuration cannot work as intended, or undefined when it is coherent.
+   *
+   * `"no-identity-provider"`: separation is on with no auth gatekeeper allowlisted, so no user is
+   * ever assigned an org and no collaborator can open anyone else's workspace.
+   *
+   * `"password-auth-users-have-no-org"`: separation is on with an IdP, but password auth is also
+   * live, so password users are permanently org-less while SSO users are not. Legitimate when
+   * deliberate; set `DISABLE_PASSWORD_AUTH=true` to clear it.
+   */
+  issue?: "no-identity-provider" | "password-auth-users-have-no-org";
 };
 
 /**
