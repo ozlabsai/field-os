@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -127,6 +127,69 @@ describe("per-worker outbound reach", () => {
         (err) => String(err.stderr).includes("FIELDOS_INTERNAL_HOSTS"),
         `${hosts} should be refused, naming the config it came from`);
     }
+  });
+
+  // TLS trust (OZL-300). The private-CA handshake itself was verified by execution against a real
+  // HTTPS origin; what is pinned here is that the CA reaches *every* network service rather than
+  // only the public one, since a bundle applied to some of them fails exactly where an internal
+  // service lives. The build-and-read-back shape is deliberate: an operator's CA that never
+  // reaches the config would otherwise look identical to one that did.
+  describe("TLS trust", () => {
+    const caPath = join(out, "test-ca.pem");
+    // Not a real certificate -- loadCaBundle checks for the PEM envelope and leaves X.509
+    // validation to workerd, so this exercises the emission path without a fixture keypair.
+    writeFileSync(caPath, "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n");
+
+    function buildWith(env) {
+      const dir = mkdtempSync(join(tmpdir(), "workerd-tls-"));
+      after(() => rmSync(dir, { recursive: true, force: true }));
+      execFileSync("node", [
+        join(ROOT, "scripts/run-workerd.mjs"), "--build-only", "--out", dir,
+        "--only", "gatekeeper-oidc",
+      ], { cwd: ROOT, stdio: "pipe", env: { ...process.env, ...env } });
+      return readFileSync(join(dir, "config.capnp"), "utf8");
+    }
+
+    it("trusts only the system bundle when no CA is configured", () => {
+      const tls = buildWith({ FIELDOS_CA_BUNDLE: "" }).match(/tlsOptions = \([^)]*\)/g);
+      assert.ok(tls.length > 0, "expected at least one network service");
+      for (const opts of tls) {
+        assert.match(opts, /trustBrowserCas = true/);
+        assert.doesNotMatch(opts, /trustedCertificates/);
+      }
+    });
+
+    it("applies an operator CA to every network service, on one line", () => {
+      const capnpWithCa = buildWith({ FIELDOS_CA_BUNDLE: caPath });
+      const tls = capnpWithCa.match(/tlsOptions = \([^)]*\)/g);
+      for (const opts of tls) assert.match(opts, /trustedCertificates = \["/);
+      // A raw newline inside a capnp string literal is a parse error at boot, long after this
+      // script exits 0 -- so the PEM must arrive escaped. Caught this way originally.
+      assert.doesNotMatch(capnpWithCa, /trustedCertificates = \["[^"]*\n/);
+    });
+
+    it("drops the system bundle when asked, so only the private CA is trusted", () => {
+      const tls = buildWith({ FIELDOS_CA_BUNDLE: caPath, FIELDOS_CA_TRUST_SYSTEM: "false" })
+          .match(/tlsOptions = \([^)]*\)/g);
+      for (const opts of tls) {
+        assert.match(opts, /trustBrowserCas = false/);
+        assert.match(opts, /trustedCertificates = \["/);
+      }
+    });
+
+    // Each of these fails at first https:// request otherwise, reported as an untrusted peer --
+    // never as the misconfiguration it is.
+    it("refuses a bundle that is missing, unreadable, or not a certificate", () => {
+      for (const [env, expected] of [
+        [{ FIELDOS_CA_BUNDLE: join(out, "nope.pem") }, "cannot read"],
+        [{ FIELDOS_CA_BUNDLE: join(ROOT, "package.json") }, "no PEM certificate"],
+        [{ FIELDOS_CA_TRUST_SYSTEM: "false" }, "requires FIELDOS_CA_BUNDLE"],
+      ]) {
+        assert.throws(() => buildWith(env),
+          (err) => String(err.stderr).includes(expected),
+          `expected failure naming ${expected}`);
+      }
+    });
   });
 
   it("covers every worker that declares an outbound service", () => {

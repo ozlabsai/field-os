@@ -205,7 +205,11 @@ Compensating controls, all required:
    replay refusal; what was missing were tests for the *flag-on* cases, now added.
 4. **Private-CA TLS** — cheaper than assumed: `tlsOptions.trustedCertificates` is a field on the
    same `Network` struct as `allow`/`deny` (`workerd.capnp:844`, :992), so the customer's CA and
-   their internal ranges are configured in one block. No connector code needed.
+   their internal ranges are configured in one block. No connector code needed. *(Done, OZL-300:
+   `FIELDOS_CA_BUNDLE`. The prediction held — one const in `run-workerd.mjs` covers every worker's
+   outbound service. Verified by execution with a negative control; `trustedCertificates` proved
+   **additive** to `trustBrowserCas`, so `FIELDOS_CA_TRUST_SYSTEM=false` exists to get the stricter
+   private-CA-only posture.)*
 5. **Apply validation to HomeAssistant**, which has neither the flag nor any `isBlockedHost` check.
    It is the on-prem template *precisely because it skipped the control* — port its structure, not
    its absent validation.
