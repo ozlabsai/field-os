@@ -1321,3 +1321,59 @@ reports the CA loaded. `pnpm gate` green (76 script tests, all packages), `pnpm 
 
 **Not covered: the deployed non-workerd path**, which OZL-300 lists as item 4 and which is a
 separate mechanism. `FIELDOS_CA_BUNDLE` is a `run-workerd.mjs` variable only.
+
+## 2026-08-17 — OZL-222: the org question was already answered; what was missing was the read-out
+
+OZL-222 sat in the handoff as "needs a decision, not code". Reading the code first changed what the
+decision was.
+
+**The handoff's framing was wrong, and the code corrected it.** The note said enabling separation
+without an IdP "locks people out". It does not. `isOrgAccessPermitted` is only reached in `open()`'s
+**non-owner** branch (`org-policy.ts:56` says so; `overseer.ts:6333` confirms it), so an org-less
+user still reaches every workspace they own. What stops is *collaboration*. That is a much narrower
+blast radius, and it is what made "refuse to boot" the wrong answer — it would trade a sharing
+outage for a total one.
+
+**The policy question was already settled, better than I would have settled it.**
+`plans/org-separation.md:61` decided "a missing claim means no org, never a default org", with a
+reason I would not have reached: above 200 groups (JWT) / 150 (SAML) Microsoft Entra omits the
+groups claim entirely and substitutes a Microsoft Graph pointer, unreachable from an airgapped
+network. A user in 250 groups would silently land in whichever org we defaulted to. A default org
+converts an authentication failure into a silent authorization grant. I had drafted "org-less users
+get a default org" as a candidate option before reading this; it was wrong, and the doc is why.
+
+**So the gap was never the org model — it was that the doc's own mitigation was never built.**
+Line 221 asked for the operator to be shown "no org resolved" plainly. Nothing did.
+
+Built:
+- `diagnoseOrgSeparationConfig` (pure, three booleans) reports the two configurations that produce
+  org-less users: separation with no `AUTH_GATEKEEPERS` at all, and separation alongside live
+  password auth. Ordering matters and is tested — with neither an IdP nor password auth disabled,
+  "no IdP" is the actionable diagnosis; reporting the other would point at the wrong fix.
+- `orgSeparationView(env)` on `AdminSettingsView.orgSeparation`, mirroring `sessionBoundsView`:
+  read-only, env-derived, on an existing RPC rather than a new one.
+- An Access-tab card in the admin panel that names the fix in each case.
+
+**Reported, not refused** — deliberately, and the precedent is one layer down: `isPasswordAuthEnabled`
+*ignores* `DISABLE_PASSWORD_AUTH` when honouring it would strand every user. Same instinct, but
+refusing at boot here would let an IdP outage stop the Worker. Enforcement already fails closed;
+what was missing was anyone being told why.
+
+**A correction I nearly shipped.** `org-separation.md:221` says "distinct error, not a generic
+denial", and I started to make the *user-facing* denial distinguishable. `api.ts:290-293` forbids
+exactly that, in a comment ending "Do not 'clarify' this string" — an identical message is what
+stops the error leaking that some other org holds a workspace at that id. The read-out is for the
+operator; the denial stays generic. Both are now stated in the design doc so the next reader does
+not repeat the attempt.
+
+**Verification.** 16 tests in `org-policy.test.ts`, RED-checked twice: deleting the no-IdP branch
+fails 3, swapping the two branches fails 2 (which is what makes the ordering test load-bearing
+rather than decorative). Kumo classes confirmed present by grep — Tailwind class names do not
+typecheck, so `bg-kumo-warning-subtle` was checked against real usage rather than assumed.
+
+Also removed a stale "Known gaps" line in `docs/configuration.md` claiming no admin UI for session
+bounds; OZL-226 shipped one (`AdminPage.tsx:595`). Flagged during OZL-300 as out of scope, fixed
+here because this change edits the same file.
+
+**Not addressed:** whether a deployment *should* run mixed auth is still a per-customer call. The
+change makes the consequence visible; it does not make it for them.

@@ -3,7 +3,7 @@ import { RpcStub } from 'capnweb'
 import { Switch, Textarea, Input, Button, Tabs, useKumoToastManager } from '@cloudflare/kumo'
 import { Hexagon, ShieldWarning, UserPlus } from '@phosphor-icons/react'
 import { useAuthenticatedApi } from './AuthContext'
-import { AdminApi, AdminFormat, AdminResourceVendor, AdminSessionBounds, AmbientGatekeeperMode, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR, OrgLookup } from '@gadgets/workshop-shared/api'
+import { AdminApi, AdminFormat, AdminResourceVendor, AdminOrgSeparation, AdminSessionBounds, AmbientGatekeeperMode, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR, OrgLookup } from '@gadgets/workshop-shared/api'
 import { applyAccentColor, DEFAULT_ACCENT_COLOR } from './theme'
 import { cacheBustSiteLogoUrl, prepareSiteLogo } from './siteLogoUtils'
 import SiteLogo from './components/SiteLogo'
@@ -80,6 +80,9 @@ export default function AdminPage() {
   // which means "inherit the ceiling" rather than 0) plus the server-computed ceiling/effective
   // values, which can't be derived client-side and are refreshed by re-reading settings after save.
   const [savedSessionBounds, setSavedSessionBounds] = useState<AdminSessionBounds | null>(null)
+  // Org separation is env-driven and read-only here; we surface it so a misconfiguration is
+  // visible somewhere, since a denied collaborator sees an ordinary "no access" either way.
+  const [orgSeparation, setOrgSeparation] = useState<AdminOrgSeparation | null>(null)
   const [lifetimeHoursDraft, setLifetimeHoursDraft] = useState('')
   const [idleMinutesDraft, setIdleMinutesDraft] = useState('')
   const [savingSessionBounds, setSavingSessionBounds] = useState(false)
@@ -125,6 +128,7 @@ export default function AdminPage() {
     setAccentDraft(view.accentColor)
     setFormats(view.formats)
     setSavedSessionBounds(view.sessionBounds)
+    setOrgSeparation(view.orgSeparation)
     setLifetimeHoursDraft(view.sessionBounds.lifetimeHours?.toString() ?? '')
     setIdleMinutesDraft(view.sessionBounds.idleMinutes?.toString() ?? '')
   }
@@ -590,6 +594,52 @@ export default function AdminPage() {
           at read time server-side. We show the effective value as what's actually in force and the
           ceiling as the reason a higher number won't be accepted, so the panel doesn't imply the
           admin has more authority here than they do. */}
+      {/* Org separation: read-only, because the boundary is env-var driven so a compromised admin
+          session cannot open it. Shown because enforcement is invisible when misconfigured -- a
+          deployment can enable the boundary and resolve an org for nobody, and every denial then
+          looks exactly like an ordinary "no access". This card is the only place that says so. */}
+      {activeTab === 'access' && orgSeparation && (
+        <div className="bg-kumo-elevated border border-kumo-line rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-semibold text-kumo-strong mb-1">Org separation</h2>
+          <p className="text-sm text-kumo-subtle mb-4">
+            Whether workspaces are partitioned between organizations. Set by the deployment's
+            environment (<code>ENABLE_ORG_SEPARATION</code>), not from this panel, so it cannot be
+            changed by an admin session.
+          </p>
+          <dl className="text-sm space-y-2">
+            <div className="flex gap-2">
+              <dt className="text-kumo-subtle w-44 shrink-0">Boundary</dt>
+              <dd className="text-kumo-strong">
+                {orgSeparation.enabled ? 'Enforced' : 'Off'}
+              </dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="text-kumo-subtle w-44 shrink-0">Cross-org sharing</dt>
+              <dd className="text-kumo-strong">
+                {orgSeparation.crossOrgSharingAllowed ? 'Allowed' : 'Denied'}
+              </dd>
+            </div>
+          </dl>
+          {orgSeparation.issue === 'no-identity-provider' && (
+            <p className="text-sm text-kumo-strong bg-kumo-warning-subtle border border-kumo-warning rounded-lg p-3 mt-4">
+              <strong>No user can be assigned an org.</strong> Separation is enforced but no sign-in
+              gatekeeper is configured (<code>AUTH_GATEKEEPERS</code>), and a user's org comes from a
+              sign-in claim. Owners still reach their own workspaces, but no one can open anyone
+              else's. Configure an identity provider, or unset <code>ENABLE_ORG_SEPARATION</code>.
+            </p>
+          )}
+          {orgSeparation.issue === 'password-auth-users-have-no-org' && (
+            <p className="text-sm text-kumo-strong bg-kumo-warning-subtle border border-kumo-warning rounded-lg p-3 mt-4">
+              <strong>Password users have no org.</strong> An org comes from a sign-in claim, so
+              accounts created with username and password are permanently outside the boundary and
+              cannot open workspaces owned by others. Intended for break-glass or service accounts;
+              set <code>DISABLE_PASSWORD_AUTH=true</code> if every user should sign in through the
+              identity provider.
+            </p>
+          )}
+        </div>
+      )}
+
       {activeTab === 'access' && savedSessionBounds && (
         <div className="bg-kumo-elevated border border-kumo-line rounded-xl p-6">
           <h2 className="text-lg font-semibold text-kumo-strong mb-1">Session bounds</h2>

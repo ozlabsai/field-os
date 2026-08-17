@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  isCrossOrgSharingAllowed, isOrgAccessAllowed, isOrgSeparationEnabled,
+  diagnoseOrgSeparationConfig, isCrossOrgSharingAllowed, isOrgAccessAllowed, isOrgSeparationEnabled,
 } from "../src/auth/org-policy";
 
 /** A workspace stamped with an org, i.e. created while separation was configured. */
@@ -91,5 +91,48 @@ describe("env flags", () => {
     expect(isCrossOrgSharingAllowed(env({ ALLOW_CROSS_ORG_SHARING: "false" }))).toBe(false);
     expect(isCrossOrgSharingAllowed(env({ ALLOW_CROSS_ORG_SHARING: "TRUE" }))).toBe(false);
     expect(isCrossOrgSharingAllowed(env({ ALLOW_CROSS_ORG_SHARING: "true" }))).toBe(true);
+  });
+});
+
+// The configuration-coherence check (OZL-222).
+//
+// Enforcement above is correct in every one of these cases -- it fails closed, which is the point.
+// What these rows cover is the gap between "correct" and "what the operator meant": a deployment
+// can enable the boundary and resolve an org for nobody, and every denial then looks exactly like
+// an ordinary one. Only this predicate can tell them apart.
+describe("diagnoseOrgSeparationConfig", () => {
+  it("reports nothing when separation is off, whatever sign-in looks like", () => {
+    expect(diagnoseOrgSeparationConfig(false, false, true)).toBe(null);
+    expect(diagnoseOrgSeparationConfig(false, true, false)).toBe(null);
+  });
+
+  it("reports nothing for the coherent deployment: separation on, IdP only", () => {
+    expect(diagnoseOrgSeparationConfig(true, true, false)).toBe(null);
+  });
+
+  // The accident this check exists for. `orgId` is only ever written by
+  // `loginOrCreateViaGatekeeper`, so with no gatekeeper nobody has an org and no collaborator can
+  // open anyone else's workspace -- deployment-wide, silently, and permanently.
+  it("flags separation enabled with no identity provider", () => {
+    expect(diagnoseOrgSeparationConfig(true, false, true)).toBe("no-identity-provider");
+  });
+
+  // Still flagged with password auth off: the absent IdP is the problem, not the password form.
+  it("flags a missing identity provider even when password auth is disabled", () => {
+    expect(diagnoseOrgSeparationConfig(true, false, false)).toBe("no-identity-provider");
+  });
+
+  // Not an error -- break-glass admins and service accounts are legitimate. But SSO users carry an
+  // org and password users never can, so collaboration works for some and silently fails for
+  // others, which an operator should not have to discover from a support ticket.
+  it("flags mixed auth, where password users are permanently org-less", () => {
+    expect(diagnoseOrgSeparationConfig(true, true, true))
+        .toBe("password-auth-users-have-no-org");
+  });
+
+  // Ordering matters: with neither an IdP nor a way to get one, "no IdP" is the actionable
+  // diagnosis. Reporting the password-auth issue instead would point at the wrong fix.
+  it("prefers the missing-IdP diagnosis when both conditions hold", () => {
+    expect(diagnoseOrgSeparationConfig(true, false, true)).toBe("no-identity-provider");
   });
 });
