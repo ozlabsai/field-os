@@ -20,7 +20,9 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectModules } from "./release/hash-lib.mjs";
-import { findDeployablePackages, readWranglerConfig } from "./release/manifest-lib.mjs";
+import {
+  findDeployablePackages, prebuildGeneratedUi, readWranglerConfig,
+} from "./release/manifest-lib.mjs";
 import { parseInternalHosts, resolveInternalHosts } from "./internal-hosts.mjs";
 import { withBuildLock } from "./build-lock.mjs";
 
@@ -247,24 +249,6 @@ const included = ALL_DEPLOYABLE.filter(
 const bundlesDir = join(args.out, "bundles");
 mkdirSync(bundlesDir, { recursive: true });
 
-// A few gatekeepers ship a generated UI module (configurator forms and/or a single-file app)
-// that `wrangler deploy`'s own `build.command` does not produce — it's a prerequisite step, the
-// same one run-local.mjs/run-dev-server.js run before `wrangler dev`. Without it the dry-run
-// bundle either fails (missing src/generated file) or silently ships a stale one left over from
-// a previous build.
-function prebuildGeneratedUi(pkg) {
-  if (existsSync(join(pkg.dir, "src", "configurator"))) {
-    execFileSync(
-        process.execPath,
-        [join(ROOT, "scripts", "build-gatekeeper-configurator.mjs"), pkg.dir, "--quiet"],
-        { stdio: "inherit", cwd: ROOT },
-    );
-  }
-  if (existsSync(join(pkg.dir, "build-app.mjs"))) {
-    execFileSync(process.execPath, [join(pkg.dir, "build-app.mjs")], { stdio: "inherit", cwd: pkg.dir });
-  }
-}
-
 const workers = []; // { pkgName, config, mainModule, modules, outDir }
 for (const pkg of included) {
   console.log(`\nbundling ${pkg.name}...`);
@@ -279,7 +263,7 @@ for (const pkg of included) {
   // OZL-256, see build-lock.mjs. prebuildGeneratedUi is inside the lock because it writes the
   // same package's src/generated/.
   withBuildLock(pkg.dir, () => {
-    prebuildGeneratedUi(pkg);
+    prebuildGeneratedUi(pkg, ROOT);
     execFileSync(
         "pnpm", ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outDir],
         { stdio: "inherit", cwd: pkg.dir },

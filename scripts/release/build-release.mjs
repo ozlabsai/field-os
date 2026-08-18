@@ -22,7 +22,8 @@ import {
   collectAssets, collectModules, stableStringify,
 } from "./hash-lib.mjs";
 import {
-  findDeployablePackages, generateManifest, readDeployInputs, readWranglerConfig,
+  findDeployablePackages, generateManifest, prebuildGeneratedUi, readDeployInputs,
+  readWranglerConfig,
 } from "./manifest-lib.mjs";
 import { withBuildLock } from "../build-lock.mjs";
 
@@ -131,6 +132,10 @@ function main() {
     // is rewritten (OZL-256, see build-lock.mjs). This loop is serial, so it never races itself --
     // the lock is what keeps it from tearing against a concurrent test run or generator.
     withBuildLock(pkg.dir, () => {
+      // Generated UI first: gitignored artifacts that worker source imports, so the dry-run below
+      // fails with ENOENT on a clean checkout without them. Inside the lock because it writes the
+      // same package's src/generated/, matching run-workerd.mjs.
+      prebuildGeneratedUi(pkg, ROOT);
       run("pnpm", ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outDir],
           { cwd: pkg.dir });
       // Remove the generated `.wrangler/validate/` tree this dry-run left behind.
