@@ -1,4 +1,14 @@
-# Cloudflare OS: An AI productivity environment
+# FieldOS: An AI productivity environment for airgapped networks
+
+FieldOS is a soft fork of [Cloudflare OS](https://github.com/cloudflare/cloudflare-os), adapted to
+run entirely on customer infrastructure with no internet access and no Cloudflare account: standalone
+`workerd`, SSO through the customer's own IdP, and models served from a local OpenAI-compatible
+endpoint. See [`plans/fieldos.md`](plans/fieldos.md) for what diverges and why, and
+[`docs/upstream-sync.md`](docs/upstream-sync.md) for how changes are pulled inward.
+
+The description below is upstream's and still describes the shared architecture. It is deliberately
+left close to the original: this is a fork that cherry-picks inward, so gratuitous rewording here
+becomes a permanent merge conflict.
 
 Cloudflare OS is an "operating system" for AI productivity originally developed for use inside Cloudflare. A large portion of Cloudflare's workforce -- from engineering to sales and everything in between -- uses Cloudflare OS every day to help them do their jobs.
 

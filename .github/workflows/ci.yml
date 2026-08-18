@@ -119,6 +119,42 @@ jobs:
       - name: Test
         run: pnpm test
 
+  # Reproducibility: build the release twice and require an identical manifest.
+  #
+  # Deliberately NOT run on every PR. It builds the whole release twice, and its value is
+  # release-shaped: it protects the content-addressed artifact store, where a non-reproducible
+  # build makes a release id name something ambiguous. Running it on `main` and on release
+  # branches covers what ships without doubling every PR's wall clock.
+  #
+  # It also covers a gap CI is otherwise blind to. CI always checks out clean, so it can only
+  # ever exercise a cold build; the second build here runs over the first one's output, which is
+  # what a developer's machine actually looks like. That is the shape of failure that reached a
+  # human on 2026-08-17 -- green CI, failing local `pnpm build`, stale `.wrangler/`.
+  reproducible:
+    name: Reproducible release build
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.head_ref, 'release/'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the release twice and compare
+        run: node scripts/release/verify-reproducible.mjs
+
   # The single check worth requiring on a branch protection rule.
   #
   # A skipped job reports "skipped", not "success", so requiring `Lint` and `Build and test`
