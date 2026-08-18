@@ -17,6 +17,7 @@
 // recognize, so this file and the renderer must evolve together (manifestVersion guards that).
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { parse } from "jsonc-parser";
 
@@ -281,4 +282,35 @@ export function generateManifest({
     workers: workerEntries,
     assets,
   };
+}
+
+/**
+ * Generate a package's committed-as-generated UI bundles before it is bundled.
+ *
+ * Two gatekeeper artifacts are gitignored but imported by worker source: a configurator built from
+ * `src/configurator/`, and a single-file app built by the package's own `build-app.mjs` into
+ * `src/generated/app.txt` (see `library-gatekeeper.ts`, which imports it). `capnweb-validate`
+ * copies `src/` into `.wrangler/validate/src/`, so a missing artifact surfaces as an ENOENT on the
+ * *copied* path, which reads like a bundler bug rather than a missing build step.
+ *
+ * Both the workerd generator and the release build need this, and only the former used to do it --
+ * so `build-release.mjs` could not build from a clean checkout at all. It passed locally only
+ * because a previous run had left the artifacts behind, and failed the first time CI ran it on a
+ * fresh machine (2026-08-18).
+ *
+ * @param {{dir: string}} pkg The package to prebuild.
+ * @param {string} root Repository root, where the configurator script lives.
+ */
+export function prebuildGeneratedUi(pkg, root) {
+  if (existsSync(join(pkg.dir, "src", "configurator"))) {
+    execFileSync(
+        process.execPath,
+        [join(root, "scripts", "build-gatekeeper-configurator.mjs"), pkg.dir, "--quiet"],
+        { stdio: "inherit", cwd: root },
+    );
+  }
+  if (existsSync(join(pkg.dir, "build-app.mjs"))) {
+    execFileSync(process.execPath, [join(pkg.dir, "build-app.mjs")],
+        { stdio: "inherit", cwd: pkg.dir });
+  }
 }
