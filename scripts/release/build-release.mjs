@@ -22,8 +22,7 @@ import {
   collectAssets, collectModules, stableStringify,
 } from "./hash-lib.mjs";
 import {
-  findDeployablePackages, generateManifest, prebuildGeneratedUi, readDeployInputs,
-  readWranglerConfig,
+  findDeployablePackages, generateManifest, readDeployInputs, readWranglerConfig,
 } from "./manifest-lib.mjs";
 import { withBuildLock } from "../build-lock.mjs";
 
@@ -132,10 +131,20 @@ function main() {
     // is rewritten (OZL-256, see build-lock.mjs). This loop is serial, so it never races itself --
     // the lock is what keeps it from tearing against a concurrent test run or generator.
     withBuildLock(pkg.dir, () => {
-      // Generated UI first: gitignored artifacts that worker source imports, so the dry-run below
-      // fails with ENOENT on a clean checkout without them. Inside the lock because it writes the
-      // same package's src/generated/, matching run-workerd.mjs.
-      prebuildGeneratedUi(pkg, ROOT);
+      // Run the package's own `build` before bundling it.
+      //
+      // `wrangler deploy --dry-run` bypasses the package's build script, but several packages
+      // generate gitignored inputs that their worker source imports -- `src/generated/app.txt`,
+      // `src/generated/format-blueprints.ts`, the configurator bundles (see .gitignore). Without
+      // them the dry-run fails to resolve an import, so the release build only ever worked on a
+      // machine where some earlier run had left those artifacts behind. Never on a fresh checkout,
+      // which is what CI and any release runner is.
+      //
+      // Deferring to each package's own `build` rather than naming the generators here: the list
+      // is per-package and grows, and a release that silently omits one produces a *broken*
+      // release rather than a failed build. The trailing `tsc` each one runs is redundant with
+      // the bundle but cheap, and it typechecks what is about to ship.
+      run("pnpm", ["run", "--if-present", "build"], { cwd: pkg.dir });
       run("pnpm", ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outDir],
           { cwd: pkg.dir });
       // Remove the generated `.wrangler/validate/` tree this dry-run left behind.
