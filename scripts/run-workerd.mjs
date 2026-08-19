@@ -188,6 +188,21 @@ function parseArgs(argv) {
   return args;
 }
 
+// Load `.env.local` if present, before anything reads process.env.
+//
+// Instance state a real deployment gets from the deploy service (ADMINS, ENABLE_ORG_SEPARATION,
+// ...) has to be supplied by hand locally, and passing it inline on every run means one forgotten
+// prefix silently changes behaviour -- an omitted ADMINS does not error, it just stops the operator
+// being an admin, with nothing anywhere saying why (OZL-310).
+//
+// A real environment variable still wins: the file is a default for the repeated case, not an
+// override of a deliberate one-off. `process.loadEnvFile` is stdlib (Node 20.12+), so this needs no
+// dependency, and `.env.local` is already gitignored.
+if (existsSync(join(ROOT, ".env.local"))) {
+  process.loadEnvFile(join(ROOT, ".env.local"));
+  console.log("loaded .env.local");
+}
+
 const args = parseArgs(process.argv.slice(2));
 validateAllow(args.allow);
 const caBundle = loadCaBundle(

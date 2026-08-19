@@ -480,8 +480,8 @@ export default function OnboardingWizard({
             </div>
 
             {/* ── Step 1: Model selection ───────────────────────────────────── */}
-            <div className="w-full flex-shrink-0 p-8 min-h-[420px]">
-              <div>
+            <div className="w-full flex-shrink-0 p-8 min-h-[420px] flex flex-col">
+              <div className="flex flex-col min-h-0 flex-1">
                 <h2 className="text-lg font-medium text-kumo-default mb-1">
                   Choose your model
                 </h2>
@@ -490,12 +490,12 @@ export default function OnboardingWizard({
                 </p>
 
                 {modelsLoading ? (
-                  <div className="flex items-center justify-center py-12">
+                  <div className="flex flex-1 items-center justify-center py-12">
                     <div className="w-6 h-6 border-2 border-kumo-brand border-t-transparent rounded-full animate-spin" />
                   </div>
                 ) : (
                   <>
-                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    <div className="space-y-2 flex-1 min-h-0 max-h-[22rem] overflow-y-auto pr-1">
                       {models.map((model) => (
                         <button
                           key={model.id}
@@ -553,7 +553,7 @@ export default function OnboardingWizard({
 
                     <button
                       onClick={() => setAddModelOpen(true)}
-                      className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-kumo-subtle border border-dashed border-kumo-line rounded-xl hover:border-kumo-fill hover:text-kumo-default hover:bg-kumo-tint transition-colors"
+                      className="mt-3 flex-shrink-0 w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-kumo-subtle border border-dashed border-kumo-line rounded-xl hover:border-kumo-fill hover:text-kumo-default hover:bg-kumo-tint transition-colors"
                     >
                       <Plus size={14} weight="bold" />
                       Add new model...
