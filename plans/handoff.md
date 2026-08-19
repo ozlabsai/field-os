@@ -99,14 +99,52 @@ server rejects, so the inference bug was invisible against it. The servers custo
 
 ## What to pick up next
 
-**Start here.** As of 2026-08-17 the shortest reads of the current state are:
+**Start here.** As of 2026-08-19 the shortest reads of the current state are:
+
+**Alpha is complete and tagged `v0.1.0-alpha.1` (`460ab56`).** All 20 Alpha issues are Done; the
+release build is verified reproducible on a clean CI machine for the first time. What follows is
+what is *open*, not what is missing from Alpha.
 
 | Ticket | State |
 |---|---|
-| OZL-222 | **Still the one needing a decision, not code — and it now gates more than it did.** Org separation is built and enforcing, but a user's org comes from a gatekeeper login claim, so under **password auth everyone is org-less, and org-less is denied** once the flag is on. Enabling separation without an IdP locks people out rather than partitioning them. Ask before building anything org-shaped. |
-| OZL-231 | Security audit. **Advanced, not closable** — see PR #89. The code work is done; what remains is signatures on `docs/security-runbook.md` and the OZL-222 answer. |
+| **OZL-311** | **The live piece of work — half done.** Guided first build. Seeded context installs itself and driver.js is added (PR #110); the walkthrough component is not written. Four remaining pieces are scoped below. |
+| OZL-231 | Security audit. **Advanced, not closable** — the code work is done; five rows in `docs/security-runbook.md` need human signatures. Beta-scoped, so it does not block Alpha. |
+| OZL-229 | Logging and maintenance dashboard, with OZL-308 folded in. **The production side of logging is already built** (116 structured calls across 16 files); the gap is that nothing *consumes* it — stdout with no retention, and `ERROR_REPORTER` unbound in the workerd stack so all 8 `reportIssue()` sites are no-ops. |
+| OZL-302 | Model config is per-user and any signed-in user can name an inference endpoint. Not privilege escalation (per-user DO state), but on a controlled-egress network it is a data-exfiltration path. |
 | OZL-228 | The post-OZL-239 sandbox work, and the largest open item. The log entry says it is *cheaper* than the ticket estimates. |
-| OZL-297, OZL-299 | Low-priority observations filed with repro context, not diagnosed. |
+| OZL-299 | **May deserve a bump from Low.** It is the likely cause of an intermittent CI failure in `__integration__/sharing-boundary.test.ts` — the two replay-after-revocation cases pass locally 16/16 and fail on CI hardware. The test file comments on the same 30s eviction timing at line 258. If confirmed, it is a build-reliability problem, not just an eviction curiosity. |
+| OZL-303/305/306/307/309/310 | Filed and triaged 2026-08-18 with `file:line` evidence. Three of them correct the premise of the original report — read the triage before starting. |
+
+### OZL-311, precisely where it stands
+
+Committed on `guy/ozl-311-seed-context` (PR #110):
+
+- Seed content as committed data with a generator, mirroring `format-blueprints/` including the
+  `SEED_CONTEXT_DIR` per-fork override.
+- An installer that runs **on an admin's first visit to the Context Library**, not at deploy.
+  This is the load-bearing decision: a public collection requires admin, and `isAdmin` arrives
+  only through `startAppUi({ isAdmin })`. A backend-callable path was considered and **rejected** —
+  it would let a gatekeeper create domain-wide content with authority no human granted, which is
+  what the capability rule in `CLAUDE.md` exists to prevent.
+- driver.js 1.8.0 (zero deps, MIT, clears `minimumReleaseAge`, and its only embedded URL —
+  `www.w3.org` — is already allowlisted in the airgap check).
+
+**Four pieces remain, and only one is the tour itself:**
+
+1. **`data-tour` attributes on every target.** There are currently **no stable selectors** in the
+   app shell — verified, `data-testid` returns nothing in `components/AppShell/`. Without these the
+   tour has nothing to attach to.
+2. **A `walkthroughCompleted` flag.** New storage field plus two RPC methods, mirroring
+   `isOnboardingCompleted` / `completeOnboarding` (`api.ts:410`, `user.ts:740`). This is a
+   `workshop-shared` API change, which reviewers read every line of — keep it to the two methods.
+3. **The tour component.** Five steps advancing on *real events* (message sent, gadget created),
+   not Next buttons. Runs after `OnboardingWizard`, which configures; this orients.
+4. **Conditional steps.** A step pointing at a disabled connector or unconfigured model highlights
+   nothing. Same reasoning as OZL-303/305.
+
+This was stopped deliberately rather than half-built: starting a kernel API change with a third of
+a context window left would have left an unfinished `workshop-shared` diff for a reviewer to
+untangle.
 
 **Two claims deliberately NOT made, which a fresh session should not assume:**
 
@@ -333,6 +371,38 @@ end. That is the same gap OZL-225 closed for inference, and the OZL-225 lesson i
 stub here *signs* rather than merely returning fixtures: a permissive stand-in proves nothing.
 
 ## Traps that have already cost time
+
+**`pnpm gate` is not what CI runs. This cost time three separate ways on 2026-08-19.**
+The gate is `lint && test`. CI additionally runs `pnpm build`, the frontend **airgap check**, and
+the **integration suite** — and each one caught something the gate had passed:
+
+| Caught by | What it was |
+|---|---|
+| `pnpm build` | stale `.wrangler/validate/` breaking a later `tsc` (green CI, red local, same commit) |
+| airgap check | a hardcoded `openrouter.ai` preset in the bundle |
+| integration suite | `sharing-boundary` replay tests, passing locally 16/16, failing on CI |
+
+"Gate green" therefore does not mean "CI will pass". Before pushing anything release-shaped, run
+`pnpm gate:release` — and for a frontend change, `pnpm --filter @gadgets/workshop-frontend build`,
+since that is what runs the airgap check.
+
+**A URL field that accepts the URL from the vendor's own docs will be pasted that way.**
+Every model call 404'd on a live deployment because `apiUrl` held
+`https://openrouter.ai/api/v1/chat/completions` — the URL every OpenAI and OpenRouter sample
+shows. The base-building code stripped a trailing `/api` or `/v1` but not `/chat/completions`, so
+it produced `.../chat/completions/v1`. Fixed, with the normalizer moved to `workshop-shared` so
+the picker and the server cannot disagree. The general lesson: the field said "Base URL of your
+OpenAI-compatible server" and that was **not enough** — people paste from the source they are
+copying, not from the field description.
+
+**Reading raw SQLite strings is not reading the config.** While diagnosing that 404 I matched a
+`resourceUrl` value and reported it as the API URL, sending the user to change something already
+correct. The field names were in the same output. Their pushback is what caught it.
+
+**`git clean -fdX` with a pathspec does not constrain the way you expect.** It removed every
+package's `node_modules` and `dist/`, which then produced six phantom test failures that had to be
+isolated before being recognised as self-inflicted. Recovered with `pnpm install && pnpm build`.
+
 
 Each of these looked like success while being wrong. That is what makes them worth listing.
 
