@@ -38,6 +38,12 @@ export default function SidebarItem({
     ? pathname === target || pathname.startsWith(target + '/')
     : pathname === target
 
+  // Stable selector for the guided walkthrough, derived from the resolved path rather than passed
+  // in by each call site: "/" -> "nav-home", "/gatekeepers/context" -> "nav-gatekeepers-context".
+  // Deriving it here means dynamically-listed rows (the gatekeeper management apps) are targetable
+  // too, and the attribute can never drift out of sync with the route it points at.
+  const tourId = 'nav' + (target === '/' ? '-home' : target.replaceAll('/', '-'))
+
   // Kept loose: the generated route-tree union is stricter than is convenient for a generic row.
   const linkProps = { to, params } as unknown as LinkProps
 
@@ -45,6 +51,7 @@ export default function SidebarItem({
     <Link
       {...linkProps}
       title={collapsed ? label : undefined}
+      data-tour={tourId}
       className={[
         'group relative flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] leading-[18px] tracking-[-0.25px] transition-colors',
         isActive
