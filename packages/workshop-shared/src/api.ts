@@ -1144,6 +1144,57 @@ export type AiModelConfig = {
 // model's window, so every Cloudflare model reserves this much of it for the response.
 export const WORKERS_AI_OUTPUT_LIMIT = 32768;
 
+/**
+ * Normalizes a self-hosted / OpenAI-compatible `apiUrl` to the server base the client needs.
+ *
+ * The stored field is meant to be the *base*, but the box is one line labelled "API URL" and every
+ * OpenAI and OpenRouter code sample shows the **completions** endpoint, so pasting that is the
+ * expected mistake rather than a careless one. Without normalization the base became
+ * `.../chat/completions/v1`, every request 404'd, and the failure surfaced at first chat -- far
+ * from the screen where the URL was typed (2026-08-19).
+ *
+ * Accepts, and strips, a trailing `/chat/completions`, `/v1` or `/api`; the caller appends `/v1`.
+ * Shared so the picker can show the user the resolved base *before* saving and the server can
+ * apply the same rule to configs already stored — one definition, no drift.
+ *
+ * @param apiUrl The URL as typed or pasted. Trailing slashes are ignored.
+ * @returns The server base, with no trailing `/v1`.
+ */
+export function normalizeModelApiUrl(apiUrl: string): string {
+  return stripTrailingModelPath(apiUrl.trim());
+}
+
+function stripTrailingModelPath(value: string): string {
+  let out = value.replace(/\/+$/, "");
+  out = out.replace(/\/chat\/completions$/, "");
+  out = out.replace(/\/(api|v1)$/, "");
+  return out;
+}
+
+/**
+ * Endpoints offered in the API URL picker for the self-hosted / OpenAI-compatible provider.
+ *
+ * A starting point, not an allowlist: any URL may be typed, and an internal deployment's endpoint
+ * will not be here.
+ *
+ * **Local hosts only, deliberately.** A hosted endpoint here would be unreachable on the network
+ * this fork exists for, and naming one in the shipped UI suggests otherwise. It would also put a
+ * public host into the built bundle, which `check-airgap-bundle.mjs` rejects (OZL-293) -- the check
+ * caught exactly that when OpenRouter was listed here. Same reasoning as OZL-303.
+ */
+export const SUGGESTED_MODEL_ENDPOINTS: ReadonlyArray<{
+  /** Short label shown in the picker. */
+  label: string;
+  /** Server base, already in the form {@link normalizeModelApiUrl} produces. */
+  url: string;
+  /** One line on when this is the right choice. */
+  hint: string;
+}> = [
+  { label: "Ollama", url: "http://localhost:11434", hint: "Local Ollama, default port" },
+  { label: "vLLM / TGI", url: "http://localhost:8000", hint: "Local OpenAI-compatible server" },
+  { label: "LM Studio", url: "http://localhost:1234", hint: "Local OpenAI-compatible server" },
+];
+
 // Models offered in the picker. `contextWindow` is the maximum tokens one request may total.
 // `outputLimit`, when present, is both the requested response cap and the space reserved for it,
 // leaving the remainder as the prompt budget context compaction sizes against.

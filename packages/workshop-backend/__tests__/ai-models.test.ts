@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AiChatAuthorInfo, AiModelConfig } from "@gadgets/workshop-shared/api";
+import { normalizeModelApiUrl, SUGGESTED_MODEL_ENDPOINTS } from "@gadgets/workshop-shared/api";
 import { getModel, type ModelHandle } from "../src/ai-models.js";
 
 // These tests exercise the real pi-ai stack: no module mocks. Routing decisions are asserted on
@@ -480,5 +481,91 @@ describe("self-hosted OpenAI-compatible servers", () => {
       apiUrl: "https://gateway.internal/inference",
     }, INITIATOR);
     expect(handle.model.baseUrl).toBe("https://gateway.internal/inference/v1");
+  });
+});
+
+// Base-URL normalization for the self-hosted / OpenAI-compatible provider.
+//
+// `apiUrl` is meant to be the server base, but the field is one text box labelled "API URL" and
+// every OpenAI and OpenRouter code sample shows the *completions* URL. Pasting that produced
+// `.../chat/completions/v1` and a 404 on every message -- surfacing at first chat, far from the
+// settings screen where the URL was typed. Verified against the real service on 2026-08-19:
+// the doubled path returns 404, the base returns 200.
+//
+// Gateway mode is off in these tests: it short-circuits this branch entirely.
+describe("self-hosted provider base URL", () => {
+  const NO_GATEWAY = {
+    CF_AI_GATEWAY: undefined,
+    CF_AI_GATEWAY_ACCOUNT_ID: undefined,
+    CF_AI_GATEWAY_API_TOKEN: undefined,
+    CF_AI_GATEWAY_PROVIDERS: undefined,
+  } as Partial<Cloudflare.Env>;
+
+  const baseUrlFor = (apiUrl?: string) => getModel(env(NO_GATEWAY), {
+    provider: "ollama",
+    model: "some-model",
+    ...(apiUrl === undefined ? {} : { apiUrl }),
+  } as AiModelConfig, INITIATOR).model.baseUrl;
+
+  it("appends /v1 to a bare server base", () => {
+    expect(baseUrlFor("http://localhost:11434")).toBe("http://localhost:11434/v1");
+  });
+
+  it("defaults to local Ollama when no apiUrl is configured", () => {
+    expect(baseUrlFor()).toBe("http://localhost:11434/v1");
+  });
+
+  it("does not double /v1 when the user pastes the /v1 endpoint", () => {
+    expect(baseUrlFor("https://openrouter.ai/api/v1")).toBe("https://openrouter.ai/api/v1");
+  });
+
+  it("strips the legacy native-API /api base", () => {
+    expect(baseUrlFor("http://host:11434/api")).toBe("http://host:11434/v1");
+  });
+
+  // The one that actually reached a user.
+  it("strips a pasted /chat/completions endpoint rather than doubling the path", () => {
+    expect(baseUrlFor("https://openrouter.ai/api/v1/chat/completions"))
+        .toBe("https://openrouter.ai/api/v1");
+  });
+
+  it("handles /chat/completions with a trailing slash", () => {
+    expect(baseUrlFor("https://openrouter.ai/api/v1/chat/completions/"))
+        .toBe("https://openrouter.ai/api/v1");
+  });
+});
+
+// The shared normalizer itself. Lives in workshop-shared so the picker can show the resolved base
+// before saving and the server can apply the same rule to already-stored configs; tested here
+// because workshop-shared has no test runner of its own.
+describe("normalizeModelApiUrl", () => {
+  it("leaves a bare base alone", () => {
+    expect(normalizeModelApiUrl("http://localhost:11434")).toBe("http://localhost:11434");
+  });
+
+  it("strips a pasted completions endpoint", () => {
+    expect(normalizeModelApiUrl("https://openrouter.ai/api/v1/chat/completions"))
+        .toBe("https://openrouter.ai/api");
+  });
+
+  it("strips a trailing /v1", () => {
+    expect(normalizeModelApiUrl("https://openrouter.ai/api/v1")).toBe("https://openrouter.ai/api");
+  });
+
+  it("strips the legacy native-API /api", () => {
+    expect(normalizeModelApiUrl("http://host:11434/api")).toBe("http://host:11434");
+  });
+
+  it("ignores surrounding whitespace and trailing slashes", () => {
+    expect(normalizeModelApiUrl("  http://localhost:11434/v1/  ")).toBe("http://localhost:11434");
+  });
+
+  // Every offered preset must already be in normal form, or picking one would immediately show
+  // the "will connect to ..." correction line and look like the picker disagreed with itself.
+  it("leaves every suggested endpoint unchanged once /v1 is re-appended", () => {
+    for (const ep of SUGGESTED_MODEL_ENDPOINTS) {
+      expect(`${normalizeModelApiUrl(ep.url)}/v1`).toBe(
+          ep.url.endsWith("/v1") ? ep.url : `${ep.url}/v1`);
+    }
   });
 });

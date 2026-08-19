@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Dialog, Button, Input, Select, SensitiveInput, Collapsible, useKumoToastManager } from '@cloudflare/kumo'
-import { AiChatAuthorInfo, AiModelConfig, AiModelProvider, AiGatewayInfo, SUGGESTED_MODELS } from '@gadgets/workshop-shared/api'
+import { AiChatAuthorInfo, AiModelConfig, AiModelProvider, AiGatewayInfo, SUGGESTED_MODELS,
+  SUGGESTED_MODEL_ENDPOINTS, normalizeModelApiUrl } from '@gadgets/workshop-shared/api'
 import { RpcStub } from 'capnweb'
 import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
 
@@ -351,17 +352,48 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
             />
           )}
 
-          {/* Ollama API URL (always visible for Ollama) */}
+          {/* Ollama API URL (always visible for Ollama).
+
+              Two affordances, because there are two distinct failure modes. The picker is for
+              "I do not know the URL"; the resolved-base line below is for "I pasted the wrong
+              one" -- pasting the *completions* endpoint is the expected mistake, since that is
+              what every OpenAI and OpenRouter sample shows, and it used to 404 at first chat far
+              from this screen. Showing the base we will actually use makes the correction visible
+              rather than silent. */}
           {showCredentials && isOllama && (
-            <Input
-              label="API URL"
-              placeholder="http://localhost:11434"
-              description="Base URL of your OpenAI-compatible server, e.g. http://vllm.internal:8000/v1"
-              value={apiUrl}
-              onChange={(e) => { setApiUrl(e.target.value); setErrors(prev => ({ ...prev, apiUrl: '' })) }}
-              error={errors.apiUrl}
-              variant={errors.apiUrl ? 'error' : 'default'}
-            />
+            <>
+              <Select
+                label="Common endpoints"
+                className="w-full text-sm"
+                placeholder="Choose an endpoint, or type one below..."
+                value={undefined}
+                onValueChange={(v) => {
+                  if (typeof v !== "string") return   // a clear, not a pick
+                  setApiUrl(v)
+                  setErrors(prev => ({ ...prev, apiUrl: '' }))
+                }}
+              >
+                {SUGGESTED_MODEL_ENDPOINTS.map(ep => (
+                  <Select.Option key={ep.url} value={ep.url}>
+                    {`${ep.label} — ${ep.url}`}
+                  </Select.Option>
+                ))}
+              </Select>
+              <Input
+                label="API URL"
+                placeholder="http://localhost:11434"
+                description="Base URL of your OpenAI-compatible server, e.g. http://vllm.internal:8000"
+                value={apiUrl}
+                onChange={(e) => { setApiUrl(e.target.value); setErrors(prev => ({ ...prev, apiUrl: '' })) }}
+                error={errors.apiUrl}
+                variant={errors.apiUrl ? 'error' : 'default'}
+              />
+              {apiUrl.trim() && normalizeModelApiUrl(apiUrl) !== apiUrl.trim() && (
+                <p className="text-xs text-kumo-subtle -mt-2">
+                  Will connect to <code>{normalizeModelApiUrl(apiUrl)}/v1</code>
+                </p>
+              )}
+            </>
           )}
 
           {/* Advanced Settings for non-Ollama, non-Cloudflare providers */}
