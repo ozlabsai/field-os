@@ -9,6 +9,8 @@ packages/gatekeeper-*/src/generated/*-configurator-ui.js*
 packages/gatekeeper-*/src/generated/app.txt
 # Bundled format blueprints (regenerated at build time from FORMAT_BLUEPRINTS_DIR).
 packages/workshop-backend/src/generated/format-blueprints.ts
+# Seeded context collections (regenerated at build time from SEED_CONTEXT_DIR).
+packages/workshop-backend/src/generated/seed-context.ts
 packages/workshop-backend/src/generated/browser-export-runtime.txt
 
 # TypeScript build info

@@ -1,0 +1,6 @@
+{
+  "collectionKey": "sample-field-reports",
+  "title": "Sample: Field Reports",
+  "description": "Fictional sample data shipped with FieldOS so a new deployment has something for the agent to read. Replace or delete it once you have your own context.",
+  "icon": "📋"
+}
