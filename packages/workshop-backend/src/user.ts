@@ -203,6 +203,11 @@ function makeUserStorage(storage: DurableObjectStorage) {
       preferredModel: <string | null>null,
       onboardingCompleted: false,
 
+      // Set once the guided walkthrough has run to completion or been dismissed. Separate from
+      // `onboardingCompleted` so an account that onboarded before the walkthrough existed still
+      // gets shown it once.
+      walkthroughCompleted: false,
+
       // Set once the user's pre-existing workspaces have been asked to populate the outputs index
       // (see #backfillOutputs()). Workspaces created since push on their own.
       outputsBackfilled: false,
@@ -742,6 +747,14 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   async completeOnboarding(): Promise<void> {
     this.storage.onboardingCompleted.put(true);
+  }
+
+  async isWalkthroughCompleted(): Promise<boolean> {
+    return this.storage.walkthroughCompleted.get();
+  }
+
+  async completeWalkthrough(): Promise<void> {
+    this.storage.walkthroughCompleted.put(true);
   }
 
   // ---------------------------------------------------------------------------------------------
