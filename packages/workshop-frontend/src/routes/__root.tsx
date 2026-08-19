@@ -13,6 +13,7 @@ import Header from '../components/Header'
 import AppShell from '../components/AppShell/AppShell'
 import LoginPage from '../LoginPage'
 import OnboardingWizard from '../OnboardingWizard'
+import Walkthrough from '../Walkthrough'
 import AccountSelectionModal from '../components/billing/AccountSelectionModal'
 
 export const Route = createRootRoute({
@@ -137,6 +138,10 @@ function AuthenticatedShell({
 }) {
   // null = still checking, true = needs onboarding, false = onboarding done
   const [onboardingNeeded, setOnboardingNeeded] = useState<boolean | null>(null)
+  // Whether the one-time guided walkthrough still has to run. Checked up front so the answer is
+  // ready by the time onboarding finishes, but the tour itself is only mounted once the app shell
+  // is on screen -- its targets are sidebar rows, which do not exist before then.
+  const [walkthroughNeeded, setWalkthroughNeeded] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -146,6 +151,19 @@ function AuthenticatedShell({
       logRpcFailure('Failed to check onboarding status:', err)
       // If the check fails, skip onboarding to avoid blocking the user
       if (!cancelled) setOnboardingNeeded(false)
+    })
+    return () => { cancelled = true }
+  }, [authenticatedApi])
+
+  useEffect(() => {
+    let cancelled = false
+    authenticatedApi.isWalkthroughCompleted().then((completed) => {
+      if (!cancelled) setWalkthroughNeeded(!completed)
+    }).catch((err) => {
+      logRpcFailure('Failed to check walkthrough status:', err)
+      // Leave the flag false: a tour is an enhancement, and a failed check must not put an overlay
+      // in front of an app the user came here to use. The cost is that they miss it, not that they
+      // are blocked -- the opposite trade-off to the onboarding check above, which skips a *gate*.
     })
     return () => { cancelled = true }
   }, [authenticatedApi])
@@ -178,6 +196,9 @@ function AuthenticatedShell({
       ) : (
         <AppShell>
           <Outlet />
+          {/* Inside AppShell so the rail the tour points at is mounted before it starts, and only
+              on this branch: the fullscreen workspace editor renders no sidebar. */}
+          {walkthroughNeeded && <Walkthrough onDone={() => setWalkthroughNeeded(false)} />}
         </AppShell>
       )}
     </>
