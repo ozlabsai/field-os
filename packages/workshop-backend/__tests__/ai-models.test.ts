@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AiChatAuthorInfo, AiModelConfig } from "@gadgets/workshop-shared/api";
+import { normalizeModelApiUrl, SUGGESTED_MODEL_ENDPOINTS } from "@gadgets/workshop-shared/api";
 import { getModel, type ModelHandle } from "../src/ai-models.js";
 
 // These tests exercise the real pi-ai stack: no module mocks. Routing decisions are asserted on
@@ -531,5 +532,40 @@ describe("self-hosted provider base URL", () => {
   it("handles /chat/completions with a trailing slash", () => {
     expect(baseUrlFor("https://openrouter.ai/api/v1/chat/completions/"))
         .toBe("https://openrouter.ai/api/v1");
+  });
+});
+
+// The shared normalizer itself. Lives in workshop-shared so the picker can show the resolved base
+// before saving and the server can apply the same rule to already-stored configs; tested here
+// because workshop-shared has no test runner of its own.
+describe("normalizeModelApiUrl", () => {
+  it("leaves a bare base alone", () => {
+    expect(normalizeModelApiUrl("http://localhost:11434")).toBe("http://localhost:11434");
+  });
+
+  it("strips a pasted completions endpoint", () => {
+    expect(normalizeModelApiUrl("https://openrouter.ai/api/v1/chat/completions"))
+        .toBe("https://openrouter.ai/api");
+  });
+
+  it("strips a trailing /v1", () => {
+    expect(normalizeModelApiUrl("https://openrouter.ai/api/v1")).toBe("https://openrouter.ai/api");
+  });
+
+  it("strips the legacy native-API /api", () => {
+    expect(normalizeModelApiUrl("http://host:11434/api")).toBe("http://host:11434");
+  });
+
+  it("ignores surrounding whitespace and trailing slashes", () => {
+    expect(normalizeModelApiUrl("  http://localhost:11434/v1/  ")).toBe("http://localhost:11434");
+  });
+
+  // Every offered preset must already be in normal form, or picking one would immediately show
+  // the "will connect to ..." correction line and look like the picker disagreed with itself.
+  it("leaves every suggested endpoint unchanged once /v1 is re-appended", () => {
+    for (const ep of SUGGESTED_MODEL_ENDPOINTS) {
+      expect(`${normalizeModelApiUrl(ep.url)}/v1`).toBe(
+          ep.url.endsWith("/v1") ? ep.url : `${ep.url}/v1`);
+    }
   });
 });

@@ -12,10 +12,11 @@ import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.mode
 import { CLOUDFLARE_WORKERS_AI_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
 import { GOOGLE_MODELS } from "@earendil-works/pi-ai/providers/google.models";
 import { OPENAI_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
-import { ApprovalQueue, Gatekeeper, ResourceDescription, stripTrailingSlashes } from '@gadgets/workshop-shared/gatekeeper';
+import { ApprovalQueue, Gatekeeper, ResourceDescription } from '@gadgets/workshop-shared/gatekeeper';
 import { LanguageModelBinding } from "./ai-model-binding";
 import AI_MODEL_BINDING_TYPES from "./ai-model-binding.txt";
-import { AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, WORKERS_AI_OUTPUT_LIMIT }
+import { AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, WORKERS_AI_OUTPUT_LIMIT,
+  normalizeModelApiUrl }
   from "@gadgets/workshop-shared/api";
 import { AiGatewayConfig, getAiGatewayConfig, type AiGatewayLogRoute } from "./ai-gateway.js";
 import { completeText } from "./ai-invoke.js";
@@ -588,8 +589,7 @@ function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelH
           name: config.model,
           api: "openai-completions",
           provider: "ollama",
-          baseUrl: `${stripTrailingSlashes(config.apiUrl ?? "http://localhost:11434")
-              .replace(/\/chat\/completions$/, "").replace(/\/(api|v1)$/, "")}/v1`,
+          baseUrl: `${normalizeModelApiUrl(config.apiUrl ?? "http://localhost:11434")}/v1`,
           // Deliberately false. pi asks for a `developer` role and `reasoning_effort` when this is
           // true, and most self-hosted servers reject both. A reasoning-capable local model loses
           // thinking rather than every request losing a 400; wrong-by-default beats broken-by-
