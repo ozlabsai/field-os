@@ -48,6 +48,11 @@ const INSTANCE_VARS = [
 // stays visible and the boundary *looks* like it works.
 const GATEKEEPER_INSTANCE_VARS = ["ENABLE_ORG_SEPARATION"];
 
+// Per-gatekeeper credentials, read from `<VENDOR>_<NAME>` in the environment and emitted as
+// `<NAME>` in that gatekeeper's bindings. Deliberately a fixed list rather than a prefix sweep:
+// forwarding whatever happens to match would put arbitrary environment content into a worker.
+const GATEKEEPER_SECRET_VARS = ["CLIENT_ID", "CLIENT_SECRET"];
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGES_DIR = join(ROOT, "packages");
 const FRONTEND_DIST = join(PACKAGES_DIR, "workshop-frontend", "dist");
@@ -487,6 +492,21 @@ for (const w of workers) {
         `      (name = "BASE_URL", text = ${capnpString(`${publicBaseUrl}/gatekeeper/${shortName}`)}),`);
     for (const name of GATEKEEPER_INSTANCE_VARS) {
       const value = process.env[name];
+      if (value !== undefined) {
+        bindingLines.push(`      (name = ${capnpString(name)}, text = ${capnpString(value)}),`);
+      }
+    }
+
+    // Per-gatekeeper OAuth credentials, namespaced in the environment so one `.env.local` can hold
+    // several gatekeepers' apps without collision: GITHUB_CLIENT_ID here becomes CLIENT_ID inside
+    // gatekeeper-github, which is the name the worker reads (`github.ts:367`).
+    //
+    // A real deployment gets these from the deploy wizard as secrets (see each package's
+    // deploy-inputs.json). Locally there was no path at all, so a bound gatekeeper could only ever
+    // answer "not configured" -- an honest error with nothing the operator could do about it.
+    const envPrefix = shortName.toUpperCase().replace(/-/g, "_");
+    for (const name of GATEKEEPER_SECRET_VARS) {
+      const value = process.env[`${envPrefix}_${name}`];
       if (value !== undefined) {
         bindingLines.push(`      (name = ${capnpString(name)}, text = ${capnpString(value)}),`);
       }
