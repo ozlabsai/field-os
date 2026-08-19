@@ -9,9 +9,9 @@
     "build:app": "node build-app.mjs && node ../workshop-frontend/scripts/check-airgap-bundle.mjs src/generated/app.txt",
     "build:app:watch": "node build-app.mjs --watch",
     "typecheck:app": "tsc -p tsconfig.app.json && tsc -p tsconfig.vite.json",
-    "types:check": "pnpm run typecheck:app && pnpm run build:app && tsc --noEmit",
-    "build": "pnpm run typecheck:app && pnpm run build:app && tsc",
-    "test": "vitest run"
+    "types:check": "pnpm run typecheck:app && pnpm run build:app && node build-seed-context.mjs && tsc --noEmit",
+    "build": "pnpm run typecheck:app && pnpm run build:app && node build-seed-context.mjs && tsc",
+    "test": "node build-seed-context.mjs && vitest run"
   },
   "dependencies": {
     "@gadgets/backend-utils": "workspace:*",

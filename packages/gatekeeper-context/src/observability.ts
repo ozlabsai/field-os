@@ -5,6 +5,10 @@ export type ContextObservabilityFields = {
   bodyBytes: number;
   branch: string;
   collectionId: string;
+  /** Stable identity of a bundled seed collection (see seed-collections.ts). */
+  collectionKey: string;
+  /** Number of documents in a bundled seed collection. */
+  documentCount: number;
   dir: string;
   filepath: string;
   maxBodyBytes: number;
