@@ -412,6 +412,15 @@ export interface AuthenticatedApi extends RpcTarget {
   // Mark the onboarding wizard as completed.
   completeOnboarding(): Promise<void>;
 
+  // Returns true if the user has finished (or dismissed) the guided walkthrough that runs once
+  // after onboarding. Distinct from `isOnboardingCompleted`: onboarding configures the account,
+  // the walkthrough orients the user in an app that is already configured.
+  isWalkthroughCompleted(): Promise<boolean>;
+
+  // Mark the guided walkthrough as completed. Called both when the user finishes the last step and
+  // when they dismiss it early -- either way it should not run again.
+  completeWalkthrough(): Promise<void>;
+
   // --- Optional Cloudflare limits / top-up flow (only meaningful when enabled server-side) ---
 
   // Get the user's current free-tier usage and connected-account balance.

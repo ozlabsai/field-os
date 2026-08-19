@@ -60,6 +60,7 @@ function StripLink({
       <Link
         to={to}
         aria-label={label}
+        data-tour={'nav' + to.replaceAll('/', '-')}
         className={[
           'flex h-8 w-8 items-center justify-center rounded-md transition-colors',
           active
