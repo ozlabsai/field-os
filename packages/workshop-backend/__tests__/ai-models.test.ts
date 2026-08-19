@@ -482,3 +482,54 @@ describe("self-hosted OpenAI-compatible servers", () => {
     expect(handle.model.baseUrl).toBe("https://gateway.internal/inference/v1");
   });
 });
+
+// Base-URL normalization for the self-hosted / OpenAI-compatible provider.
+//
+// `apiUrl` is meant to be the server base, but the field is one text box labelled "API URL" and
+// every OpenAI and OpenRouter code sample shows the *completions* URL. Pasting that produced
+// `.../chat/completions/v1` and a 404 on every message -- surfacing at first chat, far from the
+// settings screen where the URL was typed. Verified against the real service on 2026-08-19:
+// the doubled path returns 404, the base returns 200.
+//
+// Gateway mode is off in these tests: it short-circuits this branch entirely.
+describe("self-hosted provider base URL", () => {
+  const NO_GATEWAY = {
+    CF_AI_GATEWAY: undefined,
+    CF_AI_GATEWAY_ACCOUNT_ID: undefined,
+    CF_AI_GATEWAY_API_TOKEN: undefined,
+    CF_AI_GATEWAY_PROVIDERS: undefined,
+  } as Partial<Cloudflare.Env>;
+
+  const baseUrlFor = (apiUrl?: string) => getModel(env(NO_GATEWAY), {
+    provider: "ollama",
+    model: "some-model",
+    ...(apiUrl === undefined ? {} : { apiUrl }),
+  } as AiModelConfig, INITIATOR).model.baseUrl;
+
+  it("appends /v1 to a bare server base", () => {
+    expect(baseUrlFor("http://localhost:11434")).toBe("http://localhost:11434/v1");
+  });
+
+  it("defaults to local Ollama when no apiUrl is configured", () => {
+    expect(baseUrlFor()).toBe("http://localhost:11434/v1");
+  });
+
+  it("does not double /v1 when the user pastes the /v1 endpoint", () => {
+    expect(baseUrlFor("https://openrouter.ai/api/v1")).toBe("https://openrouter.ai/api/v1");
+  });
+
+  it("strips the legacy native-API /api base", () => {
+    expect(baseUrlFor("http://host:11434/api")).toBe("http://host:11434/v1");
+  });
+
+  // The one that actually reached a user.
+  it("strips a pasted /chat/completions endpoint rather than doubling the path", () => {
+    expect(baseUrlFor("https://openrouter.ai/api/v1/chat/completions"))
+        .toBe("https://openrouter.ai/api/v1");
+  });
+
+  it("handles /chat/completions with a trailing slash", () => {
+    expect(baseUrlFor("https://openrouter.ai/api/v1/chat/completions/"))
+        .toBe("https://openrouter.ai/api/v1");
+  });
+});

@@ -570,9 +570,14 @@ function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelH
       // provider id is historical; the UI labels it "Local / OpenAI-compatible".
       //
       // `apiUrl` is the server base; its OpenAI-compat endpoint lives under /v1. Accept (and
-      // strip) a trailing `/api` or `/v1` path: configs saved before the pi migration store
-      // the native-API base `http://host:11434/api` (the old ollama provider's convention), and
-      // users may paste the /v1 endpoint directly. When no API key was configured we assume
+      // strip) a trailing `/chat/completions`, `/api` or `/v1` path: configs saved before the pi
+      // migration store the native-API base `http://host:11434/api` (the old ollama provider's
+      // convention), users may paste the /v1 endpoint directly, and -- the one that actually
+      // reached a user -- they may paste the full completions URL, which is what every OpenAI and
+      // OpenRouter code sample shows. Without stripping it the base becomes
+      // `.../chat/completions/v1`, every request 404s, and the failure surfaces at first chat
+      // rather than at the settings screen where the URL was typed. When no API key was configured
+      // we assume
       // local auth and send no Authorization header at all (as before the pi migration; a strict
       // local proxy may reject an unexpected bearer token): the OpenAI SDK requires *some* key,
       // so give it a placeholder while a null default header deletes the Authorization header
@@ -584,7 +589,7 @@ function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelH
           api: "openai-completions",
           provider: "ollama",
           baseUrl: `${stripTrailingSlashes(config.apiUrl ?? "http://localhost:11434")
-              .replace(/\/(api|v1)$/, "")}/v1`,
+              .replace(/\/chat\/completions$/, "").replace(/\/(api|v1)$/, "")}/v1`,
           // Deliberately false. pi asks for a `developer` role and `reasoning_effort` when this is
           // true, and most self-hosted servers reject both. A reasoning-capable local model loses
           // thinking rather than every request losing a 400; wrong-by-default beats broken-by-
