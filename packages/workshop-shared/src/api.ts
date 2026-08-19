@@ -1175,8 +1175,12 @@ function stripTrailingModelPath(value: string): string {
  * Endpoints offered in the API URL picker for the self-hosted / OpenAI-compatible provider.
  *
  * A starting point, not an allowlist: any URL may be typed, and an internal deployment's endpoint
- * will not be here. Ordered local-first, because a deployment that can reach the public entries is
- * not the airgapped case this fork exists for.
+ * will not be here.
+ *
+ * **Local hosts only, deliberately.** A hosted endpoint here would be unreachable on the network
+ * this fork exists for, and naming one in the shipped UI suggests otherwise. It would also put a
+ * public host into the built bundle, which `check-airgap-bundle.mjs` rejects (OZL-293) -- the check
+ * caught exactly that when OpenRouter was listed here. Same reasoning as OZL-303.
  */
 export const SUGGESTED_MODEL_ENDPOINTS: ReadonlyArray<{
   /** Short label shown in the picker. */
@@ -1188,7 +1192,7 @@ export const SUGGESTED_MODEL_ENDPOINTS: ReadonlyArray<{
 }> = [
   { label: "Ollama", url: "http://localhost:11434", hint: "Local Ollama, default port" },
   { label: "vLLM / TGI", url: "http://localhost:8000", hint: "Local OpenAI-compatible server" },
-  { label: "OpenRouter", url: "https://openrouter.ai/api/v1", hint: "Hosted; needs internet" },
+  { label: "LM Studio", url: "http://localhost:1234", hint: "Local OpenAI-compatible server" },
 ];
 
 // Models offered in the picker. `contextWindow` is the maximum tokens one request may total.
