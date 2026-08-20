@@ -1443,3 +1443,58 @@ rather than leave an unfinished `workshop-shared` API change for a reviewer to u
 **Not done, and not claimed:** the restore path for the new backup script is documented but
 **unrehearsed** — the backup is proven valid (79/79 databases, integrity-checked, row counts
 matching live), which is not the same claim as proven restorable.
+
+## 2026-08-20 — OZL-311 finished, and what watching it run changed
+
+**OZL-311 is done** (PRs #113, #114, on top of #110). The walkthrough exists, and the second PR
+exists only because the first one was looked at rather than declared complete.
+
+**The highlight bug looked like a mis-anchor and was not.** driver.js's cutout covered about three
+sidebar rows while the popover named one. The attribute was already on a single 32px `<Link>`, so
+the selector was right; two defaults were wrong for this shape — `stagePadding: 10` adds 10px on
+every side (52px of cutout for a 32px row) and `duration: 400` means most of a step change is the
+box *tweening between* the previous target and the next. The give-away was that the smear spanned
+exactly the gap between two consecutive targets. A mis-anchor sits in one wrong place; a tween
+covers the path. Worth remembering as a diagnostic shape, not just a fix.
+
+**The bigger problem was that the tour did not tell a story**, and no test would ever have caught
+it. Five nav steps named five destinations and asked for five Next clicks. Everything passed; the
+thing was still wrong, because "correct" and "useful" are different properties and only one of
+them has an assertion. It now follows the arc the app is for — ask for something, it gets built,
+find the result, connect your own data — and leads with #110's seeded data so the suggested request
+is real on a fresh deployment.
+
+**A constraint decided the design, rather than being worked around.** `/workspace/$id` renders
+fullscreen with no sidebar, so the moment the user does what the tour asks, every remaining step
+loses its anchor and the component (mounted inside `AppShell`) unmounts. Rather than force the
+tour to survive that, it now *uses* it: tear down on the way in, resume from a persisted index on
+the way back. The index is client-side because a tour position is per-device UI state; the
+completion flag stayed server-side because that one is an account fact. The split is the point —
+it kept a second field out of `workshop-shared`.
+
+**The subtle bug in that design:** `destroy()` fires `onDestroyed`, so the unmount caused by
+navigating into the workspace would have marked the walkthrough *complete* at the exact moment the
+user succeeded at it. Guarded by setting `finished` before destroying. Teardown and finishing look
+identical from the library's side; only the application knows which one happened.
+
+**Two test layers, and the second earned itself.** Fixture cases pin the step filter. Two more
+mount the real `SidebarItem` through a real router and run the real `presentSteps()` against what
+it rendered — because the step list is declared against values the component *derives*, and
+asserting the halves separately lets them drift. Drifting the derivation reddens only the second
+layer. That drift is precisely what would make the tour silently decline to run, which is
+indistinguishable from a deployment that has no rail. Both layers were confirmed able to fail by
+mutation before being trusted.
+
+Building that second layer also produced a failure that looked like a product bug and was a harness
+bug: the router resolves its initial match on a microtask, so a synchronous `act()` returns with an
+empty DOM. Probing the actual rendered HTML is what separated the two — the tempting alternative
+was to weaken the assertion until it passed.
+
+**`VITE_BACKEND_HOST` caught me too, on the very trap this log already documented.** A plain
+frontend build bakes in `localhost:8787`; the stack serves `:8080`; the SPA loads and never
+connects. The health check returned 200 the whole time, because serving the SPA is not the part
+that breaks. The prior entry's lesson — a warning on a hot path is not a control — is now confirmed
+by recurrence rather than argued.
+
+**Not claimed:** the full resume path (send → workspace → return → resume at Outputs) has not been
+driven through a browser. Unit-tested and deployed is not the same claim.
