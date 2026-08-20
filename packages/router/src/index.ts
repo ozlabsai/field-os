@@ -34,9 +34,18 @@ export default {
     // that only proves the router is running reports healthy through exactly that outage --
     // which is what `GET /` does today, and why the watchdog's own check is weak.
     //
-    // Reaching the backend proves both workers are executing. It stops there on purpose: it opens
-    // no RPC session and touches no Durable Object, so it stays cheap enough to run every few
-    // seconds and cannot fail the deployment over storage problems that a restart would not fix.
+    // Reaching the backend proves both workers are executing. It stops there on purpose: no RPC
+    // session and no Durable Object storage read on the hot path, so it is cheap enough to run
+    // every few seconds and cannot fail the deployment over storage problems a restart would not
+    // fix.
+    //
+    // Not quite free, and the exception is load-bearing. `GET /api` fires the format-blueprint
+    // install (`server.ts:907-923`) once per isolate, guarded by module scope -- so after an
+    // isolate recycle the next probe pays a DO wake, and on a FRESH DEPLOYMENT the probe is what
+    // provisions it. That trigger is hung off first API traffic precisely because the AdminSettings
+    // DO does not wake on deploy, and in a container the kubelet's probe is the first visitor.
+    // Anyone "optimizing" this to a cheaper endpoint would silently move provisioning back to the
+    // first human visit.
     if (url.pathname === "/healthz") {
       try {
         // A response from the binding means the backend's isolate ran, and it proves more than
