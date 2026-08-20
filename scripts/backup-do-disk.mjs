@@ -160,11 +160,18 @@ if (failed > 0) {
 // The DO directories are written at the backup root (paths are relative to `doDisk`), and
 // keys.json sits beside them -- so the restore is two copies, not one, and naming them exactly
 // matters more than brevity here.
-// The glob has NO trailing slash, and that is load-bearing: `cp -R src/*/ dst/` copies each
-// directory's CONTENTS, flattening every DO namespace into one pile of loose .sqlite files and
-// destroying the structure the uniqueKeys address. Measured, because both forms read correct --
-// with the slash, 24 directories became 57 loose files; without it, 24 directories.
-// `*-*` matches the UUID-named namespace dirs without sweeping up keys.json or MANIFEST.json.
+// The glob has NO trailing slash, and that is load-bearing in a way that does not announce
+// itself. `cp -R src/*/ dst/` copies each directory's CONTENTS on BSD cp, flattening every DO
+// namespace into one pile of loose .sqlite files and destroying the structure the uniqueKeys
+// address -- 24 directories became 57 loose files when measured. GNU cp does NOT do this: the
+// same command is correct on Linux and destructive on macOS, so testing it in a container proves
+// nothing about the laptop an operator will actually run it on, and vice versa. Measured on both.
+//
+// Since these instructions are printed for a human, macOS is the case that matters. `*-*` is
+// correct under both implementations and, unlike the portable `cp -R src/. dst/`, excludes
+// keys.json and MANIFEST.json by construction rather than needing them deleted afterwards -- a
+// stray keys.json INSIDE do-disk would be especially bad, since it looks like the real one while
+// the guard in run-workerd.mjs checks the parent.
 console.log(`restore: stop the stack, then:\n` +
     `           rm -rf ${doDisk} && mkdir -p ${doDisk}\n` +
     `           cp -R ${outDir}/*-* ${doDisk}/` +
