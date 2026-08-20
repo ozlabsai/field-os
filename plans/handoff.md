@@ -1,6 +1,6 @@
 # Handoff — state of the airgap port
 
-Written 2026-08-10, last updated 2026-08-17. What is done, what is true, and what to pick up next.
+Written 2026-08-10, last updated 2026-08-20. What is done, what is true, and what to pick up next.
 
 The living design is [`fieldos.md`](./fieldos.md); the append-only record is
 [`fieldos-log.md`](./fieldos-log.md). This file is the orientation layer: read it first, then those.
@@ -107,7 +107,7 @@ what is *open*, not what is missing from Alpha.
 
 | Ticket | State |
 |---|---|
-| **OZL-311** | **The live piece of work — half done.** Guided first build. Seeded context installs itself and driver.js is added (PR #110); the walkthrough component is not written. Four remaining pieces are scoped below. |
+| ~~OZL-311~~ | **Done** (PRs #110, #113, #114). Guided first build: seeded context, the walkthrough, and the story rewrite that came out of watching it run. Notes below — two of them are traps that will recur. |
 | OZL-231 | Security audit. **Advanced, not closable** — the code work is done; five rows in `docs/security-runbook.md` need human signatures. Beta-scoped, so it does not block Alpha. |
 | OZL-229 | Logging and maintenance dashboard, with OZL-308 folded in. **The production side of logging is already built** (116 structured calls across 16 files); the gap is that nothing *consumes* it — stdout with no retention, and `ERROR_REPORTER` unbound in the workerd stack so all 8 `reportIssue()` sites are no-ops. |
 | OZL-302 | Model config is per-user and any signed-in user can name an inference endpoint. Not privilege escalation (per-user DO state), but on a controlled-egress network it is a data-exfiltration path. |
@@ -115,36 +115,82 @@ what is *open*, not what is missing from Alpha.
 | OZL-299 | **May deserve a bump from Low.** It is the likely cause of an intermittent CI failure in `__integration__/sharing-boundary.test.ts` — the two replay-after-revocation cases pass locally 16/16 and fail on CI hardware. The test file comments on the same 30s eviction timing at line 258. If confirmed, it is a build-reliability problem, not just an eviction curiosity. |
 | OZL-303/305/306/307/309/310 | Filed and triaged 2026-08-18 with `file:line` evidence. Three of them correct the premise of the original report — read the triage before starting. |
 
-### OZL-311, precisely where it stands
+### ~~OZL-311~~ — done, in three PRs
 
-Committed on `guy/ozl-311-seed-context` (PR #110):
+**#110 — the seeded context.** Seed content as committed data with a generator, mirroring
+`format-blueprints/` including the `SEED_CONTEXT_DIR` per-fork override, plus driver.js 1.8.0
+(zero deps, MIT, clears `minimumReleaseAge`; its only embedded URL, `www.w3.org`, is already
+allowlisted in the airgap check).
 
-- Seed content as committed data with a generator, mirroring `format-blueprints/` including the
-  `SEED_CONTEXT_DIR` per-fork override.
-- An installer that runs **on an admin's first visit to the Context Library**, not at deploy.
-  This is the load-bearing decision: a public collection requires admin, and `isAdmin` arrives
-  only through `startAppUi({ isAdmin })`. A backend-callable path was considered and **rejected** —
-  it would let a gatekeeper create domain-wide content with authority no human granted, which is
-  what the capability rule in `CLAUDE.md` exists to prevent.
-- driver.js 1.8.0 (zero deps, MIT, clears `minimumReleaseAge`, and its only embedded URL —
-  `www.w3.org` — is already allowlisted in the airgap check).
+The installer runs **on an admin's first visit to the Context Library**, not at deploy. That is the
+load-bearing decision: a public collection requires admin, `isAdmin` arrives only through
+`startAppUi({ isAdmin })`, and a backend-callable path was **rejected** because it would let a
+gatekeeper create domain-wide content with authority no human granted.
 
-**Four pieces remain, and only one is the tour itself:**
+**#113 — the walkthrough.** `data-tour` selectors, the `walkthroughCompleted` flag (two RPC
+methods, 28 kernel lines), the tour component, and conditional steps.
 
-1. **`data-tour` attributes on every target.** There are currently **no stable selectors** in the
-   app shell — verified, `data-testid` returns nothing in `components/AppShell/`. Without these the
-   tour has nothing to attach to.
-2. **A `walkthroughCompleted` flag.** New storage field plus two RPC methods, mirroring
-   `isOnboardingCompleted` / `completeOnboarding` (`api.ts:410`, `user.ts:740`). This is a
-   `workshop-shared` API change, which reviewers read every line of — keep it to the two methods.
-3. **The tour component.** Five steps advancing on *real events* (message sent, gadget created),
-   not Next buttons. Runs after `OnboardingWizard`, which configures; this orients.
-4. **Conditional steps.** A step pointing at a disabled connector or unconfigured model highlights
-   nothing. Same reasoning as OZL-303/305.
+**#114 — the story rewrite**, which came out of watching #113 run. Both fixes there are worth
+knowing before touching this again.
 
-This was stopped deliberately rather than half-built: starting a kernel API change with a third of
-a context window left would have left an unfinished `workshop-shared` diff for a reviewer to
-untangle.
+**Four things not to re-derive:**
+
+1. **`data-tour` is derived from the route, not passed in.** `SidebarItem` already resolves route
+   params to compute its active state, so the attribute costs one line there and every nav row
+   gets one — *including* the dynamically-listed gatekeeper apps, which is what makes a Context
+   Library step possible without hardcoding. It also cannot drift from the route it points at.
+   Before this, the app shell had **no stable selectors at all**: `data-testid` appears only in
+   test files.
+
+2. **driver.js's defaults are wrong for a compact sidebar, and the failure looks like a
+   mis-anchor.** The highlight covered ~3 rows while the popover named one. Not a bad selector —
+   `stagePadding: 10` on a **32px** row yields a 52px cutout, and `duration: 400` means most of a
+   step change is the cutout *tweening between* the old and new box. Now `4` and `150`. The
+   give-away was that the cutout spanned exactly the gap between two consecutive targets; a
+   mis-anchor would have sat in one wrong place instead.
+
+3. **`/workspace/$id` is fullscreen with no sidebar** (`__root.tsx`, the `fullscreen` branch).
+   Any tour step pointing at a rail row has nothing to attach to there, and a component mounted
+   inside `AppShell` unmounts outright on that navigation. The tour now uses that as the mechanism:
+   it tears down on the way in and resumes from a persisted step index on the way back, so no
+   popover floats over the editor. The index is client-side (`localStorage`, like AppShell's own
+   `gadgets:sidebar-collapsed`) because a tour position is per-device UI state; the **completion
+   flag stays on the server**, because that one is an account fact.
+
+4. **Teardown and finishing must be distinguishable.** `tour.destroy()` fires `onDestroyed`, so the
+   unmount caused by navigating into the workspace would otherwise mark the walkthrough complete —
+   at the exact moment the user did the thing it asked for. The cleanup sets its `finished` guard
+   *before* destroying.
+
+**On "advancing on real events, not Next buttons":** this file previously scoped all five steps
+that way. Both shapes were built. A pure nav tour has nothing to wait for — every target co-exists
+in the DOM — and reads as a slideshow; a pure event tour has only one honest event to wait on. The
+resolution is mixed: the composer step advances on a **real send** and deliberately has *no* Next,
+since letting someone click past it would mean completing a guided *build* without building
+anything. The remaining steps are ordinary Back/Next.
+
+**Testing it needs two layers, and the second one earned itself.** Fixture-based cases pin the
+step *filter*; two more mount the real `SidebarItem` through a real router and run the real
+`presentSteps()` against what it rendered, pinning the declaration to the derivation. Drifting the
+derivation reddens only the second layer — which is exactly the drift that would otherwise make the
+tour silently decline to run, indistinguishable from a deployment with no rail.
+
+Watch the async detail if you extend those: the router resolves its initial match on a microtask,
+so a synchronous `act()` returns with the DOM still empty. That first showed up as a failure that
+looked like a product bug.
+
+**Resetting the flag to see the tour again** (the stack must be stopped — workerd holds the DB):
+```sh
+sqlite3 <the user DO's .sqlite> \
+  "pragma wal_checkpoint(TRUNCATE); delete from _cf_KV where key='walkthroughCompleted';"
+```
+Find it with a scan for `walkthroughCompleted` under `.workerd/do-disk`. Deleting the row is
+correct rather than setting it false: a missing key reads back the declared default, which is the
+same path an account that predates the feature takes.
+
+**Not claimed:** the full resume path — send, land in the workspace, come back, pick up at
+Outputs — has not been driven end to end in a browser. The pieces are unit-tested and it is
+deployed, but that sequence is watched, not proven.
 
 **Two claims deliberately NOT made, which a fresh session should not assume:**
 
@@ -385,6 +431,25 @@ the **integration suite** — and each one caught something the gate had passed:
 "Gate green" therefore does not mean "CI will pass". Before pushing anything release-shaped, run
 `pnpm gate:release` — and for a frontend change, `pnpm --filter @gadgets/workshop-frontend build`,
 since that is what runs the airgap check.
+
+**`VITE_BACKEND_HOST` bit again on 2026-08-20, exactly as the log predicted it would.** A plain
+`pnpm --filter @gadgets/workshop-frontend build` bakes in the *dev* backend (`localhost:8787`), so
+a stack serving `:8080` hands the browser a UI that loads and then never connects. `run-workerd`
+prints a warning; the health check still returns **200**, because the SPA itself is served fine —
+the failure is one layer further in. Rebuild with `VITE_BACKEND_HOST=localhost:8080` before
+redeploying, and read the *boot log*, not the status code. This is now the fourth occurrence, and
+the previous entry already said a warning on a hot path is not a control.
+
+**Stopping the local stack needs the supervisor first, then the child — and the child may need
+`kill -9`.** `run-workerd.mjs` spawns `workerd serve` as a child that **survives its parent**: kill
+the supervisor alone and :8080 stays held by an orphan with no watchdog behind it. SIGTERM to the
+child is frequently ignored, so escalation is normal, not a symptom. Take a backup first
+(`node scripts/backup-do-disk.mjs`, `VACUUM INTO`, consistent on a live DB) — state has survived
+every `kill -9` so far and `quick_check` confirms it, but that is an observation, not a guarantee.
+
+Related: `pgrep -f "workerd serve"` **over-counts badly**. Test fixtures leak `workerd serve
+fixture.capnp` processes that outlive their runs — nine were parked on the dev box on 2026-08-19.
+Match on `config.capnp` to mean the deployment; `fixture.capnp` is test litter and safe to kill.
 
 **A URL field that accepts the URL from the vendor's own docs will be pasted that way.**
 Every model call 404'd on a live deployment because `apiUrl` held
