@@ -644,6 +644,15 @@ function warnIfFrontendBuiltForOtherHost() {
     let source = readFileSync(join(assetsDir, file), "utf8");
     if (!source.includes("localhost:8787")) continue;      // not the dev fallback build at all
     if (source.includes(expected)) continue;               // VITE_BACKEND_HOST was set correctly
+    // A build made with VITE_BACKEND_HOST *unset* also contains the string -- as the inert dev
+    // literal inside getBackendHost()'s `hostname === "localhost"` ternary, which never fires on a
+    // real hostname. That build is CORRECT for a deployment (same-origin via window.location.host,
+    // one image for every customer), so warning about it teaches operators to "fix" a good image.
+    // The two are distinguishable in the minified output. Setting the variable emits
+    //   const e="localhost:8080".trim();return e||(window.location.hostname===...
+    // while leaving it unset emits the ternary directly with no `.trim();return` prefix. Match on
+    // that shape rather than the bare literal. Verified against both real builds.
+    if (!/\.trim\(\);\s*return [^(]*\(?window\.location\.hostname/.test(source)) continue;
     console.warn(
         `WARNING: ${file} was built for the Vite dev backend (localhost:8787), but this stack ` +
         `serves the API on ${expected}. The UI will load and then fail to connect.\n` +
