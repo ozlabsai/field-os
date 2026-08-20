@@ -109,14 +109,20 @@ To restore: stop the pod, replace the state, start it.
 
 ```sh
 kubectl scale statefulset fieldos --replicas=0     # stop the writer FIRST
-kubectl exec ... -- sh -c 'cp -r /var/lib/fieldos/backup-<date>/. /var/lib/fieldos/do-disk/'
+kubectl exec ... -- sh -c 'cp -r /var/lib/fieldos/backup-<date>/*-* /var/lib/fieldos/do-disk/'
 kubectl scale statefulset fieldos --replicas=1
 ```
 
-Use `cp -r src/. dst/`, **not** `cp -r src/*/ dst/`. The glob form is not portable: BSD `cp`
-(macOS) copies each directory's *contents*, flattening every DO namespace into one pile of loose
-`.sqlite` files, while GNU `cp` (Linux) copies the directories. Measured both ways. `src/.` means
-the same thing in both.
+Note the `*-*` and the **absence of a trailing slash** — both are load-bearing, and both were
+measured rather than reasoned:
+
+- **Never `backup/*/`.** BSD `cp` (macOS) copies each directory's *contents*, flattening every DO
+  namespace into one pile of loose `.sqlite` files; GNU `cp` (Linux) copies the directories. The
+  same command is destructive on a laptop and correct in a container — and these instructions get
+  run on the laptop.
+- **Not `backup/.` either.** It is portable, but it copies `keys.json` *into* `do-disk/`, where it
+  looks exactly like the real one while the startup guard checks the parent — a decoy that defeats
+  the guard rather than tripping it. `*-*` matches only the uniqueKey-named directories.
 
 **Verify a restore by opening a workspace in the UI, not by `quick_check` or row counts.** A torn
 WAL pair restores, opens, and passes structural checks while quietly missing its most recent

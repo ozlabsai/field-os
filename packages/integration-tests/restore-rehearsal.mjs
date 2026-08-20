@@ -130,15 +130,20 @@ console.log("  do-disk and keys.json deleted");
 
 step(5, "restore from the backup");
 docker("run", "--rm", "-v", `${args.volume}:/state`, "--entrypoint", "sh", "fieldos:dev", "-c",
-    // `cp -r src/. dst/` rather than any glob form. `cp -r src/*/ dst/` is NOT portable: BSD cp
-    // (macOS) copies each directory's CONTENTS, flattening 24 DO namespaces into one pile of
-    // loose .sqlite files and destroying the structure the uniqueKeys address, while GNU cp
-    // (Linux, and this container) copies the directories themselves. Measured both ways --
-    // trailing-slash gives 0 dirs/2 loose on macOS and 24 dirs/0 loose here. An operator
-    // restoring from a macOS workstation would silently get the broken layout, so depend on
-    // neither: `src/.` means "the contents of src" identically in both.
-    "mkdir -p /state/do-disk && cp -r /state/backup/. /state/do-disk/ && " +
-    "rm -f /state/do-disk/MANIFEST.json /state/do-disk/keys.json && " +
+    // `backup/*-*` matches the uniqueKey-named DO directories and nothing else. Two traps here,
+    // both measured rather than reasoned:
+    //
+    // NOT `backup/*-*/` (trailing slash). BSD cp (macOS) copies each directory's CONTENTS,
+    // flattening every DO namespace into one pile of loose .sqlite files and destroying the
+    // structure the uniqueKeys address; GNU cp (Linux, and this container) copies the directories.
+    // The same command is destructive on a laptop and correct in a container -- so testing it here
+    // proves nothing about where an operator actually runs it.
+    //
+    // NOT `backup/.` either, which is portable but drags MANIFEST.json and keys.json INTO
+    // do-disk/. A keys.json sitting inside do-disk/ looks exactly like the real one while the
+    // guard in run-workerd.mjs checks the PARENT -- a decoy that defeats the guard instead of
+    // tripping it. `*-*` excludes both by construction, so there is no cleanup step to forget.
+    "mkdir -p /state/do-disk && cp -r /state/backup/*-* /state/do-disk/ && " +
     "cp /state/backup/keys.json /state/keys.json && ls /state/do-disk | wc -l");
 console.log("  restored do-disk and keys.json");
 
