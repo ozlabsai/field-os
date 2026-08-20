@@ -32,7 +32,10 @@ fi
 # Generating the config also runs the keys.json guard in run-workerd.mjs: if do-disk/ holds state
 # but keys.json is gone, it refuses rather than minting fresh uniqueKeys, which would orphan every
 # existing workspace behind a boot that looks entirely healthy.
-echo "entrypoint: generating config (state=$STATE_DIR port=$PORT allow=$ALLOW)"
+# FIELDOS_PUBLIC_URL is read by run-workerd.mjs straight from the environment (it needs no flag),
+# and its absence is only a warning at startup rather than an error -- a deployment with no
+# connectors configured genuinely does not need it.
+echo "entrypoint: generating config (state=$STATE_DIR port=$PORT allow=$ALLOW${FIELDOS_PUBLIC_URL:+ origin=$FIELDOS_PUBLIC_URL})"
 node /src/scripts/run-workerd.mjs \
   --build-only \
   --use-bundles \

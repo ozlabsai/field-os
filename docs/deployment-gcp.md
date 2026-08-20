@@ -14,7 +14,10 @@ Everything below follows from that:
 
 - `replicas: 1` is hardcoded in the chart, not exposed as a value.
 - The volume binds `ReadWriteOncePod`, so Kubernetes refuses a second writer cluster-wide.
-- The update strategy is `OnDelete`, because a rolling update would briefly run two pods.
+- The update strategy is `OnDelete`, so replacing the running process is an explicit act with a
+  backup before it. (`ReadWriteOncePod` is the actual enforcement — whether a StatefulSet rolling
+  update would ever overlap two pods is a claim nobody here has executed, and the design does not
+  rest on it.)
 
 Scaling up means a bigger node, not more pods.
 
@@ -57,6 +60,12 @@ helm install fieldos ./charts/fieldos \
 `config.admins` is a JSON array of usernames. **An empty list means nobody can administer the
 deployment** — there is no bootstrap flow that grants it later.
 
+**Set `config.publicUrl`** (or let it derive from `ingress.host`) if you use connectors. Gatekeepers
+build OAuth callback URLs by appending to it; unset, they default to `localhost` and a connect flow
+redirects the user's browser to their own machine — failing at the *end* of the flow, so it looks
+like a broken connector rather than a misconfigured origin. It must match what you registered at
+the provider.
+
 `config.internalHosts` grants each worker only the internal addresses for the roles it depends on
 (`inference`, `mcp`, `oidc`, `homeassistant`). Prefer it over widening `config.allow`, which opens
 every RFC1918 address to every worker with any internal dependency. Note hostnames are resolved
@@ -80,6 +89,9 @@ deliberate — it makes replacing the running process an explicit act, with a ba
 
 ```sh
 # 1. Back up. Consistent on a live database; no need to stop first.
+#    Requires an image built from #117 or later: before it, backup-do-disk.mjs expected a do-disk
+#    path rather than the state dir, and omitted keys.json entirely. The command looks identical
+#    either way, and the resulting backup is incomplete in the invisible way.
 kubectl exec fieldos-0 -- node /src/scripts/backup-do-disk.mjs \
   --state /var/lib/fieldos --out /var/lib/fieldos/backup-$(date +%Y%m%d)
 

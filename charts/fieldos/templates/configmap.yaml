@@ -7,6 +7,16 @@ data:
   # Read by docker-entrypoint.sh when it generates config.capnp at pod start.
   FIELDOS_STATE_DIR: /var/lib/fieldos
   FIELDOS_ALLOW: {{ .Values.config.allow | quote }}
+  {{- /* An explicit config.publicUrl wins; otherwise derive it from the ingress host, since that
+         IS the public origin and making an operator state it twice invites them to disagree. */}}
+  {{- $publicUrl := .Values.config.publicUrl }}
+  {{- if and (not $publicUrl) .Values.ingress.enabled .Values.ingress.host }}
+  {{- $scheme := ternary "https" "http" .Values.ingress.tls.enabled }}
+  {{- $publicUrl = printf "%s://%s" $scheme .Values.ingress.host }}
+  {{- end }}
+  {{- with $publicUrl }}
+  FIELDOS_PUBLIC_URL: {{ . | quote }}
+  {{- end }}
   {{- with .Values.config.internalHosts }}
   FIELDOS_INTERNAL_HOSTS: {{ . | quote }}
   {{- end }}

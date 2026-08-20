@@ -16,8 +16,8 @@ imagePullSecrets: []
 
 persistence:
   # ReadWriteOncePod restricts the volume to ONE POD cluster-wide. Plain ReadWriteOnce is only a
-  # per-NODE guarantee, so two pods co-scheduled on one node could both mount it read-write --
-  # exactly what a careless rolling update produces. Requires Kubernetes >= 1.29 (GA) and a CSI
+  # per-NODE guarantee, so two pods co-scheduled on one node could both mount it read-write.
+  # This is the enforcement the whole design rests on. Requires Kubernetes >= 1.29 (GA) and a CSI
   # driver; on GKE that is the Compute Engine persistent disk CSI driver, enabled by default.
   accessMode: ReadWriteOncePod
   size: 20Gi
@@ -48,6 +48,16 @@ config:
   # Usernames with access to the /admin panel, as a JSON array: '["alice","bob"]'.
   # An empty list means NO ONE can administer the deployment.
   admins: "[]"
+
+  # The origin browsers reach this deployment on, e.g. https://fieldos.example.com.
+  #
+  # REQUIRED for any deployment with connectors. Gatekeepers build their OAuth callback URLs by
+  # appending to it; unset, they default to localhost and a connect flow redirects the user's
+  # browser to their own machine. That fails at the END of the flow, so it presents as a broken
+  # connector rather than a misconfigured origin. Must match what you registered at the provider.
+  #
+  # Set automatically from ingress.host when ingress is enabled and this is empty.
+  publicUrl: ""
 
   # Egress. workerd blocks private IPs by default, and an on-prem deployment's inference server,
   # MCP hosts and IdP all live on RFC1918 space.

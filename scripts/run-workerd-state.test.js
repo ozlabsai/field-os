@@ -97,6 +97,39 @@ describe("--state", () => {
   });
 });
 
+describe("FIELDOS_PUBLIC_URL", () => {
+  // Without this, a container hands every gatekeeper a localhost callback base, so an OAuth flow
+  // redirects the user's browser to their own machine -- failing at the END of a connect flow,
+  // where it looks like a broken gatekeeper rather than a misconfigured origin.
+  function buildWith(env, extra = []) {
+    const out = tmp("rw-origin-");
+    execFileSync("node", [join(ROOT, "scripts/run-workerd.mjs"), "--build-only", "--out", out,
+      ...extra, ...(extra.length ? [] : SUBSET)],
+        { cwd: ROOT, stdio: "pipe", encoding: "utf8", env: { ...process.env, ...env } });
+    return readFileSync(join(out, "config.capnp"), "utf8");
+  }
+
+  it("defaults to localhost, and the override reaches both binding shapes", () => {
+    assert.match(buildWith({}), /"PUBLIC_BASE_URL", text = "http:\/\/localhost:8080"/);
+
+    const config = buildWith({ FIELDOS_PUBLIC_URL: "https://fieldos.example.com" },
+        ["--only", "gatekeeper-oidc"]);
+    assert.match(config, /"PUBLIC_BASE_URL", text = "https:\/\/fieldos.example.com"/);
+    // The gatekeeper gets the origin PLUS its own path segment, not the bare origin.
+    assert.match(config,
+        /"BASE_URL", text = "https:\/\/fieldos.example.com\/gatekeeper\/oidc"/);
+  });
+
+  it("refuses a malformed origin rather than baking it in", () => {
+    // Both of these would otherwise surface as a provider-side redirect_uri mismatch, far from
+    // the config that caused them.
+    assert.throws(() => buildWith({ FIELDOS_PUBLIC_URL: "not a url" }),
+        (err) => /is not a valid URL/.test(String(err.stderr)));
+    assert.throws(() => buildWith({ FIELDOS_PUBLIC_URL: "https://host/app" }),
+        (err) => /expected an origin with no path/.test(String(err.stderr)));
+  });
+});
+
 describe("keys.json guard", () => {
   it("refuses to boot when do-disk holds state but keys.json is missing", () => {
     const out = tmp("rw-guard-");

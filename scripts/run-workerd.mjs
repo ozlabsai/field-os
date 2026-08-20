@@ -272,7 +272,36 @@ for (const { role, target, code } of internalHosts.failures) {
 
 // The origin the browser reaches this deployment on. Baked into the config rather than discovered,
 // because the workers need it to build absolute callback URLs.
-const publicBaseUrl = `http://localhost:${args.port}`;
+//
+// FIELDOS_PUBLIC_URL overrides the localhost default for a deployment served on a real hostname.
+// Without it a container hands every gatekeeper `http://localhost:<port>/gatekeeper/<name>` as its
+// OAuth callback base, so a connect flow redirects the user's browser to their own machine. That
+// fails at the END of a connect flow rather than at boot -- it looks like the gatekeeper is broken
+// rather than like a misconfigured origin, which is the same shape as the VITE_BACKEND_HOST trap.
+const publicBaseUrl = (() => {
+  const override = process.env.FIELDOS_PUBLIC_URL?.trim();
+  if (!override) return `http://localhost:${args.port}`;
+  let parsed;
+  try {
+    parsed = new URL(override);
+  } catch {
+    throw new Error(
+        `FIELDOS_PUBLIC_URL: ${JSON.stringify(override)} is not a valid URL.\n` +
+        `  Give the origin the browser reaches this deployment on, e.g. https://fieldos.example.com`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`FIELDOS_PUBLIC_URL: expected an http(s) URL, got ${parsed.protocol}//`);
+  }
+  // Trailing slashes are stripped by each gatekeeper anyway, but a path component is a mistake
+  // worth naming: callback URLs are built by appending, so `https://host/app` would silently
+  // produce `https://host/app/gatekeeper/...` and mismatch whatever is registered at the provider.
+  if (parsed.pathname !== "/") {
+    throw new Error(
+        `FIELDOS_PUBLIC_URL: expected an origin with no path, got ${JSON.stringify(parsed.pathname)}.\n` +
+        `  Callback URLs are built by appending to it, so a path silently mismatches the provider.`);
+  }
+  return parsed.origin;
+})();
 
 // ---------------------------------------------------------------------------
 // 1. Discover + bundle each worker with `wrangler deploy --dry-run --outdir`.
@@ -824,6 +853,13 @@ console.log(`\nwrote ${configPath}`);
 // TLS trust, printed for the same reason as reach below: a handshake refused for want of a CA
 // reports an untrusted peer, never an empty bundle, so this is the only place an operator can see
 // that the CA they supplied was actually loaded.
+// Printed for the same reason as the reach and TLS lines below: a wrong public origin is invisible
+// until a user reaches the end of an OAuth flow, and then presents as a broken gatekeeper.
+console.log(`\npublic origin: ${publicBaseUrl}` +
+    (process.env.FIELDOS_PUBLIC_URL?.trim()
+      ? ""
+      : "  (default -- set FIELDOS_PUBLIC_URL for a deployment on a real hostname)"));
+
 console.log(`\nTLS trust: system CA bundle ${caBundle.trustSystem ? "trusted" : "NOT trusted"}` +
     (caBundle.pems.length
       ? `, plus ${caBundle.pems.length} operator CA file(s) (FIELDOS_CA_BUNDLE)`

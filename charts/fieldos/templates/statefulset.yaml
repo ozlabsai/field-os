@@ -13,11 +13,18 @@ spec:
   # it. The ReadWriteOncePod volume below is the enforcement; this is the intent.
   replicas: 1
 
-  # OnDelete, not RollingUpdate. RollingUpdate would start the replacement pod before the old one
-  # has finished terminating, which is two processes over one do-disk -- the exact overlap the
-  # single-writer constraint forbids. OnDelete makes an upgrade an explicit operator act: delete
-  # the pod, let it come back on the new image. See docs/deployment-gcp.md for the sequence
-  # (which includes taking a backup first).
+  # OnDelete, not RollingUpdate: replacing the running process becomes an explicit operator act
+  # (delete the pod), which is what lets the runbook put a backup before it. For a single-writer
+  # stateful workload an unscheduled restart is the worse surprise; "my change did not take
+  # effect" is visible and recoverable.
+  #
+  # Deliberately NOT justified by "RollingUpdate would run two pods at once". StatefulSet update
+  # ordering differs from a Deployment's, and neither reading the docs nor executing it settled
+  # whether the old pod fully terminates first -- so that claim is unverified and this does not
+  # rest on it. (`maxSurge` does not apply to StatefulSets at all, so the usual `maxSurge: 0`
+  # alternative is not on the table either.) The single-writer ENFORCEMENT is the
+  # ReadWriteOncePod volume below: even given an overlap, the second pod cannot mount it.
+  # See docs/deployment-gcp.md for the upgrade sequence.
   updateStrategy:
     type: OnDelete
 
@@ -27,9 +34,12 @@ spec:
     metadata:
       labels: {{- include "fieldos.selectorLabels" . | nindent 8 }}
       annotations:
-        # Roll the pod when instance config changes. Without this, editing values and upgrading
-        # would leave the old config running: config.capnp is generated at pod START, so a change
-        # that is never restarted is a change that never took effect.
+        # Marks the pod template as changed when instance config changes. Under OnDelete this does
+        # NOT restart anything -- step 3 of the upgrade runbook (deleting the pod) is what applies
+        # it. Do not read this as handling config changes for you: config.capnp is generated at pod
+        # START, so a config change that is never restarted is a change that never took effect.
+        # Kept because it records the change, and because it does cause a roll for anyone who
+        # switches this StatefulSet to RollingUpdate.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
     spec:
