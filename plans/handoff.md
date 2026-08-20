@@ -440,6 +440,16 @@ the failure is one layer further in. Rebuild with `VITE_BACKEND_HOST=localhost:8
 redeploying, and read the *boot log*, not the status code. This is now the fourth occurrence, and
 the previous entry already said a warning on a hot path is not a control.
 
+**But do not carry that habit into a deployment build — there, the fix is to leave it unset.**
+`getBackendHost()` (`main.tsx:61-68`) falls back to `window.location.host`, so **same-origin is
+already the assumed topology and the variable is an override, not a requirement**. The
+`localhost:8787` fallback fires only when `hostname === 'localhost'`, which is why a dev-built
+bundle breaks a localhost stack and why that failure cannot occur on a real hostname. Verified by
+building with `env -u VITE_BACKEND_HOST`: the only `localhost:8787` left in the bundle is the
+literal inside that guarded ternary — no host is baked in at all. Setting the variable for a
+deployment bakes a constant into an artifact that did not need one, and costs you one image per
+customer hostname for nothing. (Found by the GCP work, 2026-08-20.)
+
 **Stopping the local stack needs the supervisor first, then the child — and the child may need
 `kill -9`.** `run-workerd.mjs` spawns `workerd serve` as a child that **survives its parent**: kill
 the supervisor alone and :8080 stays held by an orphan with no watchdog behind it. SIGTERM to the
