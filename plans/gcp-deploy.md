@@ -148,7 +148,26 @@ update strategy chosen so no two pods ever overlap. Liveness/readiness on `/heal
 `FIELDOS_INTERNAL_HOSTS`, CA bundle, session bounds, org separation. Secrets as `Secret`, not
 `values.yaml`.
 
-**D4 — restore rehearsal, executed.** `fieldos.md:415` already names restore rehearsal as the
+**D4 — restore rehearsal — DONE, 2026-08-20. PASSED.**
+Executed against a container and a real volume: write data → back up live → `kill -9` mid-write →
+wipe → restore → read back over the API. The pre-crash user logs in, their workspace opens, its
+title reads back intact. `packages/integration-tests/restore-rehearsal.mjs`.
+
+Three things it produced beyond the pass:
+
+- **The first PASS was worthless.** A negative control (skip the restore; it must fail) *passed* —
+  because the volume name was hardcoded while `--container` was a flag, so the control wiped one
+  volume and measured another. Fixed; skipping the restore now fails cleanly. Without the control
+  this would have shipped as a green rehearsal proving nothing.
+- **`backup-do-disk.mjs` does not back up `keys.json`** (`grep` returns nothing). It copies the DO
+  databases but not the file that *names their directories*, so a restore from it alone yields a
+  deployment that cannot address its own data. The rehearsal copies it separately; fixing the
+  backup script is a follow-up and is adjacent to OZL-229.
+- **A `listGadgets()` assertion was dropped, not fixed.** A bare `newGadget()` is *provisional* and
+  hidden from the listing, so it measured the provisional filter rather than the restore and failed
+  identically with no crash at all.
+
+**Superseded — the original plan text:** `fieldos.md:415` already names restore rehearsal as the
 mitigation for the top platform risk, so this closes a gap the design opened. Backup → fresh volume
 → restore → **open a workspace in the UI**. Row counts are not sufficient: a torn WAL pair restores,
 opens, passes `quick_check`, and is quietly missing its most recent commits — which is the exact
@@ -163,10 +182,28 @@ rolling update), backup/restore, and the two experimental-surface risks stated p
 
 1. P1–P4 (code), each with a test. Send diffs to the engineering session for review — kernel rules.
 2. D1+D2, verified by running the container locally against a scratch volume.
-3. D4 restore rehearsal **before** the chart. It is the check most likely to invalidate an assumption,
-   so it runs early, while the design can still change.
+3. ~~D4 restore rehearsal before the chart.~~ **Done** — and it earned its place in the order:
+   it surfaced the `keys.json` backup gap while the design could still absorb it.
 4. D3 chart, verified on a real GKE cluster.
 5. D5 docs.
+
+## Traps this work hit
+
+- **A fresh `git worktree` has no `node_modules` AND no gitignored generated sources.** Tests fail
+  with `ERR_MODULE_NOT_FOUND: jsonc-parser`, which reads as a code error; the real cause is that
+  `packages/workshop-backend/src/generated/format-blueprints.ts` is produced by `pnpm build`. Run
+  `pnpm install && pnpm build` in any new worktree. Cost two wrong guesses before reading the error.
+- **`--build-only` re-bundles.** The bundling loop rebuilds unconditionally before config
+  generation, so the split is at *two* points, not one — hence `--use-bundles`. A container that
+  only skipped config generation would still need the full build toolchain.
+- **pnpm's layout defeats hand-picked `COPY`s, and two workerd versions are present.**
+  `node_modules/workerd` is a symlink into `.pnpm/`; the tree carries both `1.20260722.1`
+  (transitive) and the pinned `1.20260801.1`. Copy `node_modules` wholesale and let
+  `import.meta.resolve` pick — a glob could silently select the version the KV/R2 protocols are
+  not valid for.
+- **The `VITE_BACKEND_HOST` warning is a false positive in the container.** The check greps for the
+  literal without asking whether it is reachable, so it warns on a *correctly* built image. Being
+  fixed in `run-workerd.mjs` separately.
 
 ## Open questions
 
