@@ -3,63 +3,97 @@ import { driver, type DriveStep } from 'driver.js'
 import 'driver.js/dist/driver.css'
 import { logRpcFailure } from './rpcErrors'
 import { useAuthenticatedApi } from './AuthContext'
+import { WALKTHROUGH_SENT_EVENT } from './walkthroughBus'
 
-// The guided walkthrough that runs once, immediately after onboarding. Onboarding *configures* the
-// account (name, model, connections); this *orients* the user in an app that is already configured,
-// by walking the persistent left rail one region at a time.
+// The guided walkthrough that runs once, after onboarding. Onboarding *configures* the account;
+// this walks the user through building one real thing, which is what the app is actually for:
 //
-// Every target is a sidebar nav row, so all five exist in the DOM simultaneously and the tour never
-// navigates. That is what makes it a plain driver.js tour with Next buttons rather than something
-// that has to survive a route change: there is no user action to wait for between steps.
+//   ask for something  ->  it gets built  ->  find the result  ->  connect your own data
 //
-// Steps are declared against `data-tour` attributes, which SidebarItem derives from each row's
-// resolved route (see SidebarItem.tsx). Any step whose target is missing is dropped before the tour
-// starts -- see `presentSteps()`.
+// Only the first step waits on the user: it advances when a message is actually sent, not on a
+// Next button, so the tour cannot claim progress the user has not made.
+//
+// PAUSING. Sending navigates to /workspace/$id, which __root.tsx renders fullscreen with no
+// sidebar (see `fullscreen` there). This component is mounted inside AppShell, so that navigation
+// unmounts it and the effect cleanup tears the tour down -- no popover floats over the editor.
+// Returning to any shell route remounts it, and it resumes from the persisted step below.
+//
+// Steps are declared against `data-tour` attributes; nav rows derive theirs from their route (see
+// SidebarItem.tsx). Any step whose target is missing is dropped -- see `presentSteps()`.
 
-// One step of the walkthrough. `element` is the `data-tour` value of the row it points at.
+// Where the tour got to, so returning from the fullscreen workspace (or reloading) resumes instead
+// of restarting. Deliberately client-side: this is per-device UI position, not an account fact --
+// the *completion* flag is the account fact and lives on the server. Mirrors how AppShell stores
+// its own `gadgets:sidebar-collapsed`.
+const PROGRESS_KEY = 'gadgets:walkthrough-step'
+
+function readProgress(): number {
+  try {
+    const raw = Number(localStorage.getItem(PROGRESS_KEY))
+    return Number.isInteger(raw) && raw > 0 ? raw : 0
+  } catch {
+    return 0
+  }
+}
+
+function writeProgress(index: number): void {
+  try {
+    localStorage.setItem(PROGRESS_KEY, String(index))
+  } catch {
+    // A blocked localStorage costs a restarted tour, not a broken one.
+  }
+}
+
+function clearProgress(): void {
+  try {
+    localStorage.removeItem(PROGRESS_KEY)
+  } catch {
+    // Nothing to do; the completion flag on the server is what stops the tour returning.
+  }
+}
+
+// One step of the walkthrough. `element` is the `data-tour` value of its anchor; `awaitsSend` marks
+// the single step the user has to act on rather than click past.
 type WalkthroughStep = {
   element: string
   title: string
   description: string
+  awaitsSend?: boolean
 }
 
-// The tour, in order. Each entry points at a nav row the deployment may or may not have; the ones
-// it does not have are filtered out at start rather than conditionalised here.
+// The story, in order. Each entry points at something the deployment may or may not render; the
+// ones it does not are filtered out at start rather than conditionalised here.
 const STEPS: WalkthroughStep[] = [
   {
-    element: 'nav-home',
-    title: 'Start here',
+    element: 'home-composer',
+    title: 'Ask for something real',
     description:
-      'Home is the launcher. Describe what you want in plain language and the agent builds it — ' +
-      'no template to pick first.',
-  },
-  {
-    element: 'nav-workspaces',
-    title: 'Your work lives here',
-    description:
-      'Each thing you build gets a workspace: the conversation, the app, and its data together. ' +
-      'Come back to one and the agent still has the context.',
-  },
-  {
-    element: 'nav-blueprints',
-    title: 'Reusable starting points',
-    description:
-      'A blueprint is a workspace someone already shaped. Start from one when you want the shape ' +
-      'without describing it again.',
+      'Describe what you want in plain language — there is no template to pick first. This ' +
+      'deployment ships with sample site-visit data, so "chart the visits by site and tell me ' +
+      'what stands out" is a real thing to try. Send it and the tour picks up afterwards.',
+    awaitsSend: true,
   },
   {
     element: 'nav-outputs',
-    title: 'Finished results collect here',
+    title: 'Your results collect here',
     description:
-      'Documents, dashboards and reports your workspaces produce land in Outputs, so you can find ' +
-      'them without remembering which workspace made them.',
+      'That workspace keeps the conversation, the app, and its data together — and the documents ' +
+      'and dashboards it produces land in Outputs, so you can find them later without ' +
+      'remembering which workspace made them.',
+  },
+  {
+    element: 'nav-gatekeepers-context',
+    title: 'This is what it read',
+    description:
+      'The sample data lives in the Context Library. Add your own documents here and the agent ' +
+      'reads them the same way — as something it can look at, not something it can change.',
   },
   {
     element: 'nav-gatekeepers',
-    title: 'Connect your tools and data',
+    title: 'Connect your own tools',
     description:
-      'Gatekeepers give the agent scoped access to outside services. It only ever reaches what you ' +
-      'connect here, and writes wait for your approval.',
+      'Gatekeepers give the agent scoped access to outside services. It only ever reaches what ' +
+      'you connect here, and anything that writes waits for your approval.',
   },
 ]
 
@@ -71,13 +105,29 @@ export function presentSteps(): DriveStep[] {
   return STEPS.filter((step) => document.querySelector(`[data-tour="${step.element}"]`)).map(
     (step) => ({
       element: `[data-tour="${step.element}"]`,
-      popover: { title: step.title, description: step.description },
+      popover: {
+        title: step.title,
+        description: step.description,
+        // The step the user has to act on offers no way to click past it; the others get ordinary
+        // Back/Next. Leaving Next on the composer step would let someone "complete" the tour
+        // without ever having asked for anything, which is the whole point of it.
+        showButtons: step.awaitsSend
+          ? (['close'] as const).slice()
+          : (['previous', 'next', 'close'] as const).slice(),
+      },
     }),
   )
 }
 
-// Runs the walkthrough once for a user who has not seen it, then records that they have. Renders
-// nothing: driver.js owns its own overlay, mounted on document.body.
+// Whether the step at `index` is the one waiting on a send. Leaving before that has happened is
+// the case worth confirming, since every step after it describes what that action produced.
+function isAwaitingSend(steps: DriveStep[], index: number): boolean {
+  const element = steps[index]?.element
+  return typeof element === 'string' && element.includes('home-composer')
+}
+
+// Runs the walkthrough for a user who has not finished it, then records that they have. Renders
+// nothing: driver.js owns its overlay, mounted on document.body.
 //
 // `onDone` lets the shell drop this component once the tour is over, so its listeners and the
 // driver instance are not kept alive for the rest of the session.
@@ -93,14 +143,17 @@ export default function Walkthrough({ onDone }: { onDone: () => void }) {
       return
     }
 
-    // Marking completion is deliberately fire-and-forget and happens on *any* exit -- finishing the
-    // last step, the close button, Escape, or clicking the overlay. A user who dismissed a tour has
-    // answered the question; showing it again on next login would be nagging. Failure to persist is
-    // logged, not surfaced: the cost is seeing the tour once more, which is not worth a toast.
+    // Resume where we left off, clamped in case this deployment renders fewer steps than the one
+    // the position was written on.
+    const start = Math.min(readProgress(), steps.length - 1)
+
+    // Recorded on any finish -- the last step, or an explicit dismissal. Fire-and-forget: failing
+    // to persist costs one extra sighting of the tour, which is not worth a toast.
     let finished = false
     const finish = () => {
       if (finished) return
       finished = true
+      clearProgress()
       authenticatedApi.completeWalkthrough().catch((err) => {
         logRpcFailure('Failed to record walkthrough completion:', err)
       })
@@ -108,19 +161,72 @@ export default function Walkthrough({ onDone }: { onDone: () => void }) {
     }
 
     const tour = driver({
-      showProgress: true,
       steps,
+      showProgress: true,
       nextBtnText: 'Next',
       prevBtnText: 'Back',
       doneBtnText: 'Done',
-      // Fires on close/Escape/overlay-click and after the final step's Done.
-      onDestroyed: finish,
+      // The rail's rows are 32px tall, and driver.js pads the cutout by 10px on every side by
+      // default -- on a row that short it reads as a box floating around the item rather than on
+      // it.
+      stagePadding: 4,
+      stageRadius: 8,
+      // The default 400ms transition is what makes a step change look like it is highlighting the
+      // rows *between* two targets: the cutout is mid-tween for most of that. Short enough to
+      // still connect the two positions, brief enough not to be mistaken for the highlight.
+      animate: true,
+      duration: 150,
+      // Clicking the backdrop is the "I would rather look around" signal. Before the user has
+      // asked for anything, every remaining step describes what that action produced, so confirm
+      // rather than silently dropping them out; afterwards, just let them go.
+      overlayClickBehavior: () => {
+        if (isAwaitingSend(steps, tour.getActiveIndex() ?? 0)) {
+          const leave = window.confirm(
+            'Leave the walkthrough? It is waiting for you to ask for something — that first ' +
+              'request is what the rest of it builds on.',
+          )
+          if (!leave) return
+        }
+        tour.destroy()
+      },
+      onDestroyed: () => finish(),
     })
-    tour.drive()
+
+    tour.drive(start)
+
+    // Remember the position on every move, so returning from the fullscreen workspace resumes.
+    // driver.js exposes no "step changed" hook on the instance, so watch the same user actions
+    // that move it. Cheap, and wrong only in the direction of re-showing a step already seen.
+    const remember = () => {
+      const index = tour.getActiveIndex()
+      if (typeof index === 'number') writeProgress(index)
+    }
+    document.addEventListener('click', remember, true)
+    document.addEventListener('keyup', remember, true)
+
+    // The composer step advances on a real send rather than a button.
+    const onSent = () => {
+      const next = (tour.getActiveIndex() ?? 0) + 1
+      if (next >= steps.length) {
+        finish()
+        return
+      }
+      // Recorded before moving: the send navigates to the fullscreen workspace, which unmounts
+      // this component almost immediately, and the resume path reads exactly this value.
+      writeProgress(next)
+      tour.drive(next)
+    }
+    window.addEventListener(WALKTHROUGH_SENT_EVENT, onSent)
 
     return () => {
-      // Unmounting mid-tour (a logout, or a hot reload in dev) must not leave driver.js's overlay
-      // attached to document.body with no React tree behind it.
+      window.removeEventListener(WALKTHROUGH_SENT_EVENT, onSent)
+      document.removeEventListener('click', remember, true)
+      document.removeEventListener('keyup', remember, true)
+      // Unmounting mid-tour (navigating into a workspace, a logout, a hot reload) must not leave
+      // driver.js's overlay attached to document.body with no React tree behind it. Setting
+      // `finished` first stops onDestroyed reading this teardown as the user finishing -- which
+      // would mark the walkthrough complete on the way into the very workspace it asked for.
+      finished = true
       if (tour.isActive()) tour.destroy()
     }
   }, [authenticatedApi, onDone])

@@ -21,11 +21,21 @@ import { presentSteps } from "./Walkthrough";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 window.scrollTo = () => {};
 
-// Render a rail containing exactly the given `data-tour` rows, standing in for whichever nav items
-// a deployment actually shows.
-function renderRail(tourIds: string[]) {
+// Every anchor the story points at, in order.
+const ALL = [
+  "home-composer",
+  "nav-outputs",
+  "nav-gatekeepers-context",
+  "nav-gatekeepers",
+];
+
+const selector = (id: string) => `[data-tour="${id}"]`;
+
+// Render a page containing exactly the given `data-tour` anchors, standing in for whichever of
+// them a deployment actually shows.
+function renderAnchors(tourIds: string[]) {
   document.body.innerHTML = tourIds
-    .map((id) => `<a data-tour="${id}">row</a>`)
+    .map((id) => `<a data-tour="${id}">anchor</a>`)
     .join("");
 }
 
@@ -34,58 +44,57 @@ afterEach(() => {
 });
 
 describe("presentSteps", () => {
-  it("keeps every step when the deployment renders the whole rail", () => {
-    renderRail([
-      "nav-home",
-      "nav-workspaces",
-      "nav-blueprints",
-      "nav-outputs",
-      "nav-gatekeepers",
-    ]);
-    const steps = presentSteps();
-    expect(steps).toHaveLength(5);
-    // Declaration order is the tour's order, and must survive filtering.
-    expect(steps.map((s) => s.element)).toEqual([
-      '[data-tour="nav-home"]',
-      '[data-tour="nav-workspaces"]',
-      '[data-tour="nav-blueprints"]',
-      '[data-tour="nav-outputs"]',
-      '[data-tour="nav-gatekeepers"]',
-    ]);
+  it("keeps every step, in story order, when the deployment renders them all", () => {
+    renderAnchors(ALL);
+    expect(presentSteps().map((s) => s.element)).toEqual(ALL.map(selector));
   });
 
-  it("drops steps whose target this deployment does not render", () => {
-    // A deployment with connectors disabled and no blueprints surface.
-    renderRail(["nav-home", "nav-workspaces", "nav-outputs"]);
+  it("drops steps whose anchor this deployment does not render", () => {
+    // A deployment with no Context Library gatekeeper and connectors disabled.
+    renderAnchors(["home-composer", "nav-outputs"]);
     const steps = presentSteps();
-    expect(steps.map((s) => s.element)).toEqual([
-      '[data-tour="nav-home"]',
-      '[data-tour="nav-workspaces"]',
-      '[data-tour="nav-outputs"]',
-    ]);
+    expect(steps.map((s) => s.element)).toEqual(
+      ["home-composer", "nav-outputs"].map(selector),
+    );
     // The point of the filter: nothing points at an element that is not there.
     for (const step of steps) {
       expect(document.querySelector(step.element as string)).not.toBeNull();
     }
   });
 
-  it("returns nothing when the rail is absent, so the tour can decline to run", () => {
-    renderRail([]);
+  it("returns nothing when no anchor is present, so the tour can decline to run", () => {
+    renderAnchors([]);
     expect(presentSteps()).toHaveLength(0);
   });
 
+  it("gives the composer step no way to click past it", () => {
+    renderAnchors(ALL);
+    const [composer] = presentSteps();
+    // Only 'close'. A Next here would let someone finish the tour without ever asking for
+    // anything, which is the one action the whole story is built on.
+    expect(composer.popover?.showButtons).toEqual(["close"]);
+    expect(composer.popover?.showButtons).not.toContain("next");
+  });
+
+  it("gives the later steps ordinary navigation", () => {
+    renderAnchors(ALL);
+    const [, outputs] = presentSteps();
+    expect(outputs.popover?.showButtons).toContain("next");
+    expect(outputs.popover?.showButtons).toContain("previous");
+  });
+
   it("carries the popover copy for each surviving step", () => {
-    renderRail(["nav-home"]);
+    renderAnchors(["home-composer"]);
     const [step] = presentSteps();
-    expect(step.popover?.title).toBe("Start here");
-    expect(step.popover?.description).toContain("launcher");
+    expect(step.popover?.title).toBe("Ask for something real");
+    expect(step.popover?.description).toContain("site-visit");
   });
 });
 
-// The steps above are declared against `data-tour` values that SidebarItem *derives* from each
-// row's route. Asserting the two halves separately would let them drift: a change to the derivation
-// would leave the filter test green while every step silently stopped matching. This mounts the
-// real SidebarItem and runs the real presentSteps() against what it rendered.
+// The nav steps are declared against `data-tour` values that SidebarItem *derives* from each row's
+// route. Asserting the two halves separately would let them drift: a change to the derivation
+// would leave the filter tests green while every nav step silently stopped matching. This mounts
+// the real SidebarItem and runs the real presentSteps() against what it rendered.
 describe("presentSteps against the real SidebarItem", () => {
   let root: Root | undefined;
   let host: HTMLDivElement | undefined;
@@ -133,23 +142,17 @@ describe("presentSteps against the real SidebarItem", () => {
     });
   }
 
-  it("matches every step when the real rows for them are rendered", async () => {
-    await renderRows(["/", "/workspaces", "/blueprints", "/outputs", "/gatekeepers"]);
-    // The contract under test: what SidebarItem emits is what STEPS declares.
-    expect(presentSteps().map((s) => s.element)).toEqual([
-      '[data-tour="nav-home"]',
-      '[data-tour="nav-workspaces"]',
-      '[data-tour="nav-blueprints"]',
-      '[data-tour="nav-outputs"]',
-      '[data-tour="nav-gatekeepers"]',
-    ]);
+  it("matches the nav steps the real rows emit", async () => {
+    await renderRows(["/outputs", "/gatekeepers/context", "/gatekeepers"]);
+    // The contract under test: what SidebarItem emits is what STEPS declares. The composer step
+    // is absent here because no composer is rendered, which is the filter doing its job.
+    expect(presentSteps().map((s) => s.element)).toEqual(
+      ["nav-outputs", "nav-gatekeepers-context", "nav-gatekeepers"].map(selector),
+    );
   });
 
-  it("drops the steps whose real rows this deployment does not render", async () => {
-    await renderRows(["/", "/workspaces"]);
-    expect(presentSteps().map((s) => s.element)).toEqual([
-      '[data-tour="nav-home"]',
-      '[data-tour="nav-workspaces"]',
-    ]);
+  it("drops the nav steps whose real rows this deployment does not render", async () => {
+    await renderRows(["/outputs"]);
+    expect(presentSteps().map((s) => s.element)).toEqual([selector("nav-outputs")]);
   });
 });

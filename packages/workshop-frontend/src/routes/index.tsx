@@ -21,6 +21,7 @@ import {
 } from "../modelSelection";
 import { useDocumentTitle } from "../useDocumentTitle";
 import { homePromptFromSearch } from "../homePrompt";
+import { notifyWalkthroughSent } from "../walkthroughBus";
 
 type HomeSearch = { prompt?: string };
 
@@ -118,6 +119,11 @@ export function HomePageContent({ prompt }: HomeSearch) {
         ]);
         provisionalOverseerRef.current?.stub[Symbol.dispose]();
         provisionalOverseerRef.current = null;
+        // The walkthrough's composer step waits on this: the user has now asked for something
+        // real, which is the only part of the story they perform themselves. Fired before the
+        // navigation so the tour records its progress while it is still mounted (the workspace
+        // route is fullscreen and unmounts the rail, and the tour with it).
+        notifyWalkthroughSent();
         // Open the conversation we just started.
         navigate({ to: "/workspace/$id", params: { id }, search: { chat } });
       } catch (err) {
@@ -179,7 +185,10 @@ export function HomePageContent({ prompt }: HomeSearch) {
           </p>
         </header>
 
-        {/* Composer */}
+        {/* Composer. The wrapper carries the walkthrough's anchor: the tour points at the composer
+            as a whole, and ChatInput is shared by every chat surface, so tagging it here keeps the
+            attribute on the one instance the tour actually means. */}
+        <div data-tour="home-composer">
         <ChatInput
           createCapsuleGatekeeper={createCapsuleGatekeeper}
           getOverseer={getOverseer}
@@ -195,6 +204,7 @@ export function HomePageContent({ prompt }: HomeSearch) {
           seedText={seed.text}
           seedNonce={seed.nonce}
         />
+        </div>
 
         {/* A few example work tasks to spark ideas. Picking one seeds the composer above. */}
         <HomeTaskSuggestions
