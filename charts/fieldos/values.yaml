@@ -41,6 +41,15 @@ ingress:
     enabled: false
     secretName: ""
 
+  # GKE only. The GCE load balancer ignores the Ingress's nginx annotations and reads backend
+  # behaviour from a BackendConfig CRD, so without this it applies its DEFAULT 30s backend timeout
+  # and silently kills the workspace's long-lived WebSocket. The frontend reconnects with backoff,
+  # so it looks like periodic disconnects rather than a timeout. Disable on a non-GKE cluster,
+  # where the CRD does not exist.
+  backendConfig:
+    enabled: false
+    timeoutSec: 3600
+
 # FieldOS instance configuration. These reach the workers through the generated workerd config;
 # `run-workerd.mjs` forwards a fixed named list, so adding a key here that it does not forward has
 # no effect (see INSTANCE_VARS in that file).

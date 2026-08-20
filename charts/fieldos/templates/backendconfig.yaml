@@ -1,0 +1,28 @@
+{{- if .Values.ingress.backendConfig.enabled }}
+{{- /*
+  GKE's own ingress controller (the GCE load balancer) ignores the nginx annotations on the Ingress
+  and reads backend behaviour from this CRD instead. Without it the load balancer applies its
+  DEFAULT 30-second backend timeout, which silently kills the workspace's long-lived Cap'n Web
+  WebSocket -- the frontend reconnects with backoff, so it presents as periodic disconnects rather
+  than as a timeout anyone configured.
+
+  Verified on the target cluster: no IngressClass is registered (so nginx annotations would be
+  inert) while `backendconfigs.cloud.google.com/v1` is available with `spec.timeoutSec`.
+
+  Also points the load balancer's own health check at /healthz. Left to itself the GCE health
+  check probes `/`, which is served by the asset service and returns 200 while the API is
+  unreachable -- the same weak signal the kubelet probe deliberately avoids. Two probes with
+  different opinions about health is worse than one.
+*/}}
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: {{ include "fieldos.fullname" . }}
+  labels: {{- include "fieldos.labels" . | nindent 4 }}
+spec:
+  timeoutSec: {{ .Values.ingress.backendConfig.timeoutSec }}
+  healthCheck:
+    type: HTTP
+    requestPath: /healthz
+    port: 8080
+{{- end }}

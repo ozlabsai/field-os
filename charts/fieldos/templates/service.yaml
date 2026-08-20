@@ -3,6 +3,12 @@ kind: Service
 metadata:
   name: {{ include "fieldos.fullname" . }}
   labels: {{- include "fieldos.labels" . | nindent 4 }}
+  {{- if .Values.ingress.backendConfig.enabled }}
+  annotations:
+    # Binds the BackendConfig to this Service. Without the annotation the CRD exists and is simply
+    # never consulted -- the load balancer keeps its 30s default and nothing reports a problem.
+    cloud.google.com/backend-config: '{"default":"{{ include "fieldos.fullname" . }}"}'
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
   ports:
