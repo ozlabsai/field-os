@@ -28,6 +28,38 @@ export default {
       }
     }
 
+    // Liveness, for an orchestrator that restarts a wedged deployment (a runaway gadget can stall
+    // the process; see OZL-239). Deliberately NOT served from this worker alone: the failure this
+    // has to catch is the API being unreachable while the asset service still answers, so a probe
+    // that only proves the router is running reports healthy through exactly that outage --
+    // which is what `GET /` does today, and why the watchdog's own check is weak.
+    //
+    // Reaching the backend proves both workers are executing. It stops there on purpose: it opens
+    // no RPC session and touches no Durable Object, so it stays cheap enough to run every few
+    // seconds and cannot fail the deployment over storage problems that a restart would not fix.
+    if (url.pathname === "/healthz") {
+      try {
+        // A response from the binding means the backend's isolate ran, and it proves more than
+        // that a function returned: `GET /api` comes out the far side of the format-blueprint
+        // install (`ctx.waitUntil(ctx.exports.AdminSettings...)`), the optional CF Access JWT
+        // verification, and `new PublicApiImpl(...)` before capnweb refuses it with 400
+        // (server.ts:902-955). So a healthy answer proves module-scope state, `ctx.exports` and
+        // constructor execution. Do not weaken this to something cheaper on the assumption that
+        // it only checks reachability. Status is deliberately NOT checked for `ok`,
+        // since the healthy answer is a 4xx; what is checked is that a Response came back through
+        // the service binding rather than the binding throwing, which is the actual liveness
+        // signal. (`GET`, not `POST`: a POST returns 500 from capnweb parsing an empty batch,
+        // and a probe whose healthy answer is 500 will be misread by whoever reads it next.)
+        const res = await env.WORKSHOP_BACKEND.fetch(new URL("/api", url).toString());
+        return new Response(`ok (backend ${res.status})\n`,
+            { headers: { "content-type": "text/plain" } });
+      } catch (err) {
+        return new Response(`backend unreachable: ${err}\n`, {
+          status: 503, headers: { "content-type": "text/plain" },
+        });
+      }
+    }
+
     if (url.pathname === "/api" || url.pathname.startsWith("/api/") ||
         url.pathname === "/blueprint-screenshot" ||
         url.pathname.startsWith("/blueprint-screenshot/")) {

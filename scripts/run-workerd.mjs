@@ -4,10 +4,22 @@
 // `wrangler deploy --dry-run`, emits a workerd `config.capnp` wiring the bundles together, and
 // (unless --build-only) spawns `workerd serve` on it.
 //
-// Usage: node scripts/run-workerd.mjs [--out .workerd] [--port 8080] [--allow public,private]
-//                                      [--build-only] [--no-watchdog] [--only <pkg,...>]
-//                                      [--interceptor]
+// Usage: node scripts/run-workerd.mjs [--out .workerd] [--state <dir>] [--port 8080]
+//                                      [--allow public,private]
+//                                      [--build-only] [--bundle-only] [--use-bundles]
+//                                      [--no-watchdog]
+//                                      [--only <pkg,...>] [--interceptor]
 //                                      [--watchdog-interval 5000] [--watchdog-failures 3]
+//
+// --bundle-only stops after bundling; --build-only also writes config.capnp. The distinction
+// matters when baking a container image: config.capnp embeds instance state (ADMINS, CA bundle,
+// session ceilings) and absolute paths, so it must be generated at boot, not baked into a layer.
+//
+// --state puts durable state (do-disk/, keys.json) somewhere other than --out, so a container can
+// mount a volume for those while bundles/ stay in the image. Defaults to --out.
+//
+// --use-bundles reads bundles a previous --bundle-only wrote rather than rebuilding them, so a
+// container can generate config at boot without carrying the build toolchain.
 //
 // Environment: FIELDOS_CA_BUNDLE=/path/ca.pem[,/path/other.pem] trusts an operator's private CA
 // for internal HTTPS services (OZL-300); FIELDOS_CA_TRUST_SYSTEM=false additionally drops the
@@ -161,7 +173,8 @@ function loadCaBundle(paths, trustSystemRaw) {
 
 function parseArgs(argv) {
   const args = {
-    out: join(ROOT, ".workerd"), port: 8080, allow: ["public", "private"], buildOnly: false,
+    out: join(ROOT, ".workerd"), state: undefined, port: 8080, allow: ["public", "private"],
+    buildOnly: false, bundleOnly: false, useBundles: false,
     watchdog: true, watchdogInterval: 5000, watchdogFailures: 3, only: undefined,
     interceptor: false,
   };
@@ -177,6 +190,7 @@ function parseArgs(argv) {
     const nextValue = () => (inlineValue !== undefined ? inlineValue : argv[++i]);
 
     if (a === "--out") args.out = resolve(nextValue());
+    else if (a === "--state") args.state = resolve(nextValue());
     else if (a === "--port") args.port = Number.parseInt(nextValue(), 10);
     else if (a === "--allow") {
       const raw = nextValue();
@@ -185,6 +199,8 @@ function parseArgs(argv) {
       args.only = nextValue().split(",").map((s) => s.trim()).filter(Boolean);
     } else if (a === "--interceptor") args.interceptor = true;
     else if (a === "--build-only") args.buildOnly = true;
+    else if (a === "--bundle-only") args.bundleOnly = true;
+    else if (a === "--use-bundles") args.useBundles = true;
     else if (a === "--no-watchdog") args.watchdog = false;
     else if (a === "--watchdog-interval") args.watchdogInterval = Number.parseInt(nextValue(), 10);
     else if (a === "--watchdog-failures") args.watchdogFailures = Number.parseInt(nextValue(), 10);
@@ -271,9 +287,28 @@ mkdirSync(bundlesDir, { recursive: true });
 
 const workers = []; // { pkgName, config, mainModule, modules, outDir }
 for (const pkg of included) {
-  console.log(`\nbundling ${pkg.name}...`);
-
   const outDir = join(bundlesDir, pkg.name);
+
+  // --use-bundles: read bundles a previous --bundle-only produced instead of rebuilding them.
+  //
+  // This is what makes a container image possible. Bundling needs the whole pnpm workspace and
+  // wrangler; generating config needs only the bundle output plus each wrangler.jsonc. Without
+  // this the runtime image would have to carry the full build toolchain and re-bundle nine
+  // workers on every container start -- and every restart would recompile the deployment.
+  if (args.useBundles) {
+    if (!existsSync(outDir)) {
+      throw new Error(
+          `--use-bundles: no bundle for ${pkg.name} at ${outDir}.\n` +
+          "  Run --bundle-only first, or drop --use-bundles to bundle now.");
+    }
+    console.log(`using existing bundle for ${pkg.name}`);
+    workers.push({
+      pkgName: pkg.name, config: readWranglerConfig(pkg.dir), ...collectModules(outDir), outDir,
+    });
+    continue;
+  }
+
+  console.log(`\nbundling ${pkg.name}...`);
   // Custom build commands (capnweb-validate) resolve their bin via `pnpm exec`, which requires
   // cwd to be inside the package so pnpm finds its node_modules/.bin.
   //
@@ -305,12 +340,36 @@ for (const pkg of included) {
   workers.push({ pkgName: pkg.name, config, mainModule, modules, outDir });
 }
 
+if (args.bundleOnly) {
+  console.log("--bundle-only: bundles written, not generating config.");
+  process.exit(0);
+}
+
 // ---------------------------------------------------------------------------
 // 2. uniqueKey persistence: generated once, reused across runs (it names the on-disk DO dir).
 // ---------------------------------------------------------------------------
 
-const keysPath = join(args.out, "keys.json");
+// Durable state lives here: the DO databases and the uniqueKeys that name their directories.
+// Defaults to --out so an ordinary local run is unchanged, but a container passes --state to put
+// these two on a mounted volume while `bundles/` and `config.capnp` stay in the image, which
+// --out alone cannot express: it conflates build output, ephemeral config and permanent state.
+const stateDir = args.state ?? args.out;
+mkdirSync(stateDir, { recursive: true });
+
+const keysPath = join(stateDir, "keys.json");
 const keys = existsSync(keysPath) ? JSON.parse(readFileSync(keysPath, "utf8")) : {};
+
+// A missing keys.json beside EXISTING DO directories is the one failure that is invisible:
+// uniqueKeyFor() would mint fresh UUIDs, workerd would create new empty directories, and the
+// deployment would boot healthy while every existing user's data sat unreachable on the same
+// volume. There is no migration mechanism, so refuse rather than silently start a second life.
+const doDiskPath = join(stateDir, "do-disk");
+if (!existsSync(keysPath) && existsSync(doDiskPath) && readdirSync(doDiskPath).length > 0) {
+  throw new Error(
+      `${doDiskPath} holds Durable Object state but ${keysPath} is missing. Generating new ` +
+      "uniqueKeys would orphan every existing workspace behind a healthy-looking boot. Restore " +
+      "keys.json from backup, or point --state at an empty directory to start fresh.");
+}
 
 function uniqueKeyFor(id) {
   if (!keys[id]) keys[id] = crypto.randomUUID();
@@ -663,7 +722,6 @@ function warnIfFrontendBuiltForOtherHost() {
 
 // The DO storage directory. workerd fails at startup with `Directory named "do-disk" not found`
 // if this isn't created before boot.
-const doDiskPath = join(args.out, "do-disk");
 mkdirSync(doDiskPath, { recursive: true });
 serviceEntries.push(`    (name = "do-disk", disk = (path = ${capnpString(doDiskPath)}, writable = true)),`);
 
