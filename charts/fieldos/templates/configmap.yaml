@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fieldos.fullname" . }}-config
+  labels: {{- include "fieldos.labels" . | nindent 4 }}
+data:
+  # Read by docker-entrypoint.sh when it generates config.capnp at pod start.
+  FIELDOS_STATE_DIR: /var/lib/fieldos
+  FIELDOS_ALLOW: {{ .Values.config.allow | quote }}
+  {{- with .Values.config.internalHosts }}
+  FIELDOS_INTERNAL_HOSTS: {{ . | quote }}
+  {{- end }}
+
+  # Backend instance state. run-workerd.mjs forwards these by name into the workers' bindings;
+  # a key not on its INSTANCE_VARS list has no effect, so do not add one here expecting it to work.
+  ADMINS: {{ .Values.config.admins | quote }}
+  ENABLE_ORG_SEPARATION: {{ .Values.config.enableOrgSeparation | quote }}
+  ALLOW_CROSS_ORG_SHARING: {{ .Values.config.allowCrossOrgSharing | quote }}
+  DISABLE_PASSWORD_AUTH: {{ .Values.config.disablePasswordAuth | quote }}
+  {{- with .Values.config.sessionMaxLifetimeHours }}
+  SESSION_MAX_LIFETIME_HOURS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.sessionMaxIdleMinutes }}
+  SESSION_MAX_IDLE_MINUTES: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.authGatekeepers }}
+  AUTH_GATEKEEPERS: {{ . | quote }}
+  {{- end }}

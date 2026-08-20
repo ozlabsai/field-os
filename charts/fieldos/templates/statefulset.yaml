@@ -1,0 +1,124 @@
+{{- $fullName := include "fieldos.fullname" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullName }}
+  labels: {{- include "fieldos.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $fullName }}-headless
+
+  # ONE. Not a default, an invariant. All durable state is SQLite on a local disk (workerd's
+  # `localDisk` DO storage), which does not lock -- a second replica is data corruption, not
+  # capacity. Deliberately hardcoded rather than templated from values, so no override can raise
+  # it. The ReadWriteOncePod volume below is the enforcement; this is the intent.
+  replicas: 1
+
+  # OnDelete, not RollingUpdate. RollingUpdate would start the replacement pod before the old one
+  # has finished terminating, which is two processes over one do-disk -- the exact overlap the
+  # single-writer constraint forbids. OnDelete makes an upgrade an explicit operator act: delete
+  # the pod, let it come back on the new image. See docs/deployment-gcp.md for the sequence
+  # (which includes taking a backup first).
+  updateStrategy:
+    type: OnDelete
+
+  selector:
+    matchLabels: {{- include "fieldos.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "fieldos.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Roll the pod when instance config changes. Without this, editing values and upgrading
+        # would leave the old config running: config.capnp is generated at pod START, so a change
+        # that is never restarted is a change that never took effect.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      # A wedged workerd ignores SIGTERM (verified -- run-workerd.mjs goes straight to SIGKILL in
+      # its own respawn path). Waiting the default 30s before escalating just delays every restart
+      # of the failure mode most likely to need one.
+      terminationGracePeriodSeconds: 10
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000        # `node` in the image
+        fsGroup: 1000          # so the mounted PVC is writable without an init container
+      containers:
+        - name: fieldos
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: {{ $fullName }}-config
+          {{- if or .Values.caBundle.pem .Values.caBundle.existingSecret }}
+          env:
+            - name: FIELDOS_CA_BUNDLE
+              value: /etc/fieldos/ca/{{ .Values.caBundle.key }}
+            - name: FIELDOS_CA_TRUST_SYSTEM
+              value: {{ .Values.caBundle.trustSystem | quote }}
+          {{- end }}
+
+          # /healthz reaches the backend worker. Do NOT point these at `/`: it is served by the
+          # asset service and returns 200 while the API is unreachable, so a probe there keeps a
+          # dead deployment alive indefinitely.
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/fieldos
+            {{- if or .Values.caBundle.pem .Values.caBundle.existingSecret }}
+            - name: ca-bundle
+              mountPath: /etc/fieldos/ca
+              readOnly: true
+            {{- end }}
+      {{- if or .Values.caBundle.pem .Values.caBundle.existingSecret }}
+      volumes:
+        - name: ca-bundle
+          secret:
+            secretName: {{ .Values.caBundle.existingSecret | default (printf "%s-ca" $fullName) }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+        {{- if .Values.persistence.retain }}
+        annotations:
+          # `helm uninstall` deletes the StatefulSet but this keeps the PVC, and with it every
+          # workspace. Removing the data has to be a separate, deliberate `kubectl delete pvc`.
+          helm.sh/resource-policy: keep
+        {{- end }}
+      spec:
+        accessModes: [{{ .Values.persistence.accessMode }}]
+        {{- if .Values.persistence.storageClassName }}
+        storageClassName: {{ .Values.persistence.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}

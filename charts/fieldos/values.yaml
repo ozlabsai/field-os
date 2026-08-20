@@ -1,0 +1,119 @@
+# FieldOS deployment values.
+#
+# Read `docs/deployment-gcp.md` before changing anything under `persistence` or `replicaCount`.
+# All durable state is SQLite on a local disk, so this deployment is single-writer by construction.
+
+image:
+  repository: fieldos
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# NOT configurable, and deliberately not a value: the deployment is single-writer. Every durable
+# byte is SQLite under workerd's `localDisk` DO storage, which does not lock. A second replica is
+# not a scaling knob, it is data corruption. The StatefulSet hardcodes 1 and the PVC's
+# ReadWriteOncePod binding makes the platform refuse a second writer even if this file lied.
+
+persistence:
+  # ReadWriteOncePod restricts the volume to ONE POD cluster-wide. Plain ReadWriteOnce is only a
+  # per-NODE guarantee, so two pods co-scheduled on one node could both mount it read-write --
+  # exactly what a careless rolling update produces. Requires Kubernetes >= 1.29 (GA) and a CSI
+  # driver; on GKE that is the Compute Engine persistent disk CSI driver, enabled by default.
+  accessMode: ReadWriteOncePod
+  size: 20Gi
+  # Empty uses the cluster default. On GKE prefer a class backed by SSD (`premium-rwo`); the
+  # workload is many small SQLite databases, so it is IOPS-sensitive rather than throughput-bound.
+  storageClassName: ""
+  # Keep the PVC if the release is uninstalled. `helm uninstall` would otherwise delete the
+  # StatefulSet's volume along with every workspace in it.
+  retain: true
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  tls:
+    enabled: false
+    secretName: ""
+
+# FieldOS instance configuration. These reach the workers through the generated workerd config;
+# `run-workerd.mjs` forwards a fixed named list, so adding a key here that it does not forward has
+# no effect (see INSTANCE_VARS in that file).
+config:
+  # Usernames with access to the /admin panel, as a JSON array: '["alice","bob"]'.
+  # An empty list means NO ONE can administer the deployment.
+  admins: "[]"
+
+  # Egress. workerd blocks private IPs by default, and an on-prem deployment's inference server,
+  # MCP hosts and IdP all live on RFC1918 space.
+  #
+  # `public,private` is blunt: it opens every RFC1918 address to every worker with any internal
+  # dependency. Prefer narrowing with internalHosts below, which grants each worker only the
+  # addresses for the roles it actually depends on.
+  allow: "public,private"
+
+  # Per-role internal hosts, e.g. "inference=vllm.corp.internal:8000,mcp=10.42.8.20".
+  # Roles: inference, mcp, oidc, homeassistant. A role may repeat for several servers.
+  # NOTE: hostnames are resolved at config generation, i.e. at POD START -- workerd filters on the
+  # resolved address and never sees the name. A host that changes address is unreachable until the
+  # pod restarts.
+  internalHosts: ""
+
+  # Org separation. Must be set identically for the backend and the gatekeepers; the chart passes
+  # one value to both, since setting only one makes the boundary *look* like it works.
+  enableOrgSeparation: false
+  allowCrossOrgSharing: false
+
+  # Session bounds. Lowering these tightens existing deployments immediately: the server
+  # sanitizes-then-clamps on read, so the stored value and the effective value can differ.
+  sessionMaxLifetimeHours: ""
+  sessionMaxIdleMinutes: ""
+
+  disablePasswordAuth: false
+  # Sign-in gatekeepers, as a JSON array, e.g. '["oidc"]'.
+  authGatekeepers: ""
+
+# Private CA for internal HTTPS services whose certificates chain to a customer PKI -- the usual
+# case on an airgapped network, which cannot obtain a publicly-trusted certificate.
+#
+# `trustSystem: false` trusts ONLY this CA, so a public CA cannot vouch for an internal name.
+# Additive otherwise: both a private-CA origin and a public one work.
+caBundle:
+  # PEM contents. Rendered into a Secret and mounted; prefer `existingSecret` in production so the
+  # certificate is not in your values file.
+  pem: ""
+  existingSecret: ""
+  key: "ca.pem"
+  trustSystem: true
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    # No CPU limit by default. A runaway gadget already wedges the process (OZL-239) and CPU
+    # throttling makes that both likelier and harder to diagnose; the memory limit is the backstop.
+    memory: 8Gi
+
+# The liveness probe deliberately targets /healthz, which reaches the BACKEND worker. `GET /`
+# returns 200 while the API is unreachable, so a probe pointed there keeps a dead deployment alive.
+livenessProbe:
+  initialDelaySeconds: 60      # config generation + workerd boot; a slow node needs the headroom
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 4
+readinessProbe:
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}

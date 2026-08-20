@@ -1,0 +1,40 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullName := include "fieldos.fullname" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  labels: {{- include "fieldos.labels" . | nindent 4 }}
+  annotations:
+    # The workspace is a long-lived Cap'n Web WebSocket, not request/response. Ingress controllers
+    # commonly default to a 30-60s backend timeout, which silently drops idle sessions; the
+    # frontend reconnects with backoff, so this shows up as periodic disconnects rather than an
+    # obvious failure. GKE's controller reads the timeout from a BackendConfig, so set one there
+    # too if you use it.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    {{- with .Values.ingress.annotations }}{{- toYaml . | nindent 4 }}{{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # One origin serves the SPA, /api and the gatekeepers -- the router dispatches by path.
+          # Do NOT split these across hosts: the frontend derives its API origin from
+          # window.location, so a split origin breaks the WebSocket with no build-time signal.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}
