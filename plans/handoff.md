@@ -457,9 +457,41 @@ child is frequently ignored, so escalation is normal, not a symptom. Take a back
 (`node scripts/backup-do-disk.mjs`, `VACUUM INTO`, consistent on a live DB) — state has survived
 every `kill -9` so far and `quick_check` confirms it, but that is an observation, not a guarantee.
 
-Related: `pgrep -f "workerd serve"` **over-counts badly**. Test fixtures leak `workerd serve
-fixture.capnp` processes that outlive their runs — nine were parked on the dev box on 2026-08-19.
-Match on `config.capnp` to mean the deployment; `fixture.capnp` is test litter and safe to kill.
+Related: `pgrep -f "workerd serve"` **over-counts in two directions, and a `pkill` built on it is
+deployment-wide, not per-stack.** Test fixtures leak `workerd serve fixture.capnp` processes that
+outlive their runs (nine were parked on the dev box on 2026-08-19) — those are test litter, safe to
+kill. But **another session's stack matches too**: neither `run-workerd.mjs` nor
+`workerd/bin/workerd serve` carries a port, so `pkill -9 -f "workerd/bin/workerd serve"` takes down
+every stack on the box. That happened on 2026-08-20 with two sessions sharing a machine; the
+watchdog respawned the collateral stack within three probe intervals and nothing was lost, but it
+is luck, not design.
+
+The command line cannot tell two stacks apart — every one of them is the same
+`workerd serve config.capnp`. What *is* unique is the process's **`cwd`, which is the `--out`
+directory**, and the port it listens on. Neither shows up in `ps`, so identify by port:
+
+```sh
+# who holds :8080 -- this is your stack
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+
+# and what --out it is running from, to be sure
+lsof -a -p <pid> -d cwd -Fn | grep ^n
+```
+
+Kill that pid, not a pattern. Reserve the bare deployment-wide `pkill` for a deliberate "stop
+everything on this box" — and remember the supervisor still has to go first, or the watchdog
+respawns what you just killed.
+
+**`--out` is not a free choice: it is only relocatable near the repo.** The generated config mixes
+two path schemes — disk services are embedded **absolute** (`run-workerd.mjs:654,693`, the frontend
+`dist` and `do-disk`), while every worker module is embedded **relative to `--out`**
+(`:470,473,617,631,646,707`, via `relative(args.out, ...)`). Point `--out` somewhere far away, say
+`/tmp`, and the relative paths climb out of the tree: the config writes fine, the script exits 0,
+and workerd dies at boot with `Couldn't read file for embed: ../../Users/.../fieldos-runtime/src/kv.js`.
+
+Same failure signature as the `capnpString` newline bug below — late, at boot, naming a *file*
+rather than the flag that caused it. Keep `--out` beside the repo, or make the module embeds
+absolute too. (Found by the GCP containerization work, 2026-08-20.)
 
 **A URL field that accepts the URL from the vendor's own docs will be pasted that way.**
 Every model call 404'd on a live deployment because `apiUrl` held
