@@ -205,6 +205,25 @@ rolling update), backup/restore, and the two experimental-surface risks stated p
   literal without asking whether it is reachable, so it warns on a *correctly* built image. Being
   fixed in `run-workerd.mjs` separately.
 
+## Answered on the live cluster (2026-08-20)
+
+Reaching `gke_ozla-476923_us-central1_field-gke` (v1.35.6) settled three things:
+
+- **`ReadWriteOncePod` is accepted by this cluster's API server.** The guarantee the platform choice
+  rests on, now checked on the target rather than inferred from docs. PD CSI driver present.
+- **TLS: GCE ingress + a GKE `ManagedCertificate`.** No `IngressClass` is registered, but
+  `ManagedCertificate` and `FrontendConfig` are — so Google terminates TLS, and there is no nginx.
+- **Which meant the chart's WebSocket keepalive was inert.** The nginx `proxy-read-timeout`
+  annotation does nothing on a GCE ingress; the load balancer applies a default 30s backend timeout
+  and drops the workspace WebSocket. Now shipped as a `BackendConfig` (`spec.timeoutSec`), which
+  also points the LB health check at `/healthz` rather than letting it probe `/`.
+
+**`config.publicUrl` stays a warning, not a hard requirement.** A deployment with no connectors
+genuinely does not need it, and the chart derives it from `ingress.host` in the case that matters,
+so requiring it would block the one configuration where it is redundant. The mitigation is
+visibility rather than enforcement: the origin is printed at startup and flagged as a default when
+unset, which is the same treatment as outbound reach and TLS trust.
+
 ## Open questions
 
 - **Ingress and TLS.** GKE Ingress vs. a Service of type LoadBalancer; who terminates TLS. Needs a
