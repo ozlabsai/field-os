@@ -50,6 +50,16 @@ ingress:
     enabled: false
     timeoutSec: 3600
 
+  # GKE-managed TLS. Google provisions and renews the certificate -- no Secret, no cert-manager.
+  # Mutually exclusive with tls.enabled, which expects a Secret you supply.
+  #
+  # Provisioning requires ingress.host to ALREADY resolve to the Ingress's load balancer IP, since
+  # Google validates by reaching the name over HTTP. Create the Ingress first, read its IP, point
+  # DNS at it, then wait 15-30 minutes. It also cannot succeed while the record is proxied by a CDN
+  # that terminates TLS itself -- on Cloudflare that means DNS-only (grey cloud), not proxied.
+  managedCertificate:
+    enabled: false
+
 # FieldOS instance configuration. These reach the workers through the generated workerd config;
 # `run-workerd.mjs` forwards a fixed named list, so adding a key here that it does not forward has
 # no effect (see INSTANCE_VARS in that file).

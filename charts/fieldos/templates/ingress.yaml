@@ -13,6 +13,10 @@ metadata:
     # too if you use it.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    {{- if .Values.ingress.managedCertificate.enabled }}
+    # Binds the ManagedCertificate. GKE reads TLS from this annotation, not from the `tls:` block.
+    networking.gke.io/managed-certificates: {{ include "fieldos.fullname" . }}
+    {{- end }}
     {{- with .Values.ingress.annotations }}{{- toYaml . | nindent 4 }}{{- end }}
 spec:
   {{- with .Values.ingress.className }}
