@@ -1,9 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { driver, type DriveStep } from 'driver.js'
 import 'driver.js/dist/driver.css'
 import { logRpcFailure } from './rpcErrors'
 import { useAuthenticatedApi } from './AuthContext'
-import { WALKTHROUGH_SENT_EVENT } from './walkthroughBus'
+import { WALKTHROUGH_SENT_EVENT, WALKTHROUGH_MODEL_EVENT } from './walkthroughBus'
 
 // The guided walkthrough that runs once, after onboarding. Onboarding *configures* the account;
 // this walks the user through building one real thing, which is what the app is actually for:
@@ -59,18 +59,30 @@ type WalkthroughStep = {
   title: string
   description: string
   awaitsSend?: boolean
+  /** Shown only when the deployment has no model at all; advances when one is chosen. */
+  awaitsModel?: boolean
 }
 
 // The story, in order. Each entry points at something the deployment may or may not render; the
 // ones it does not are filtered out at start rather than conditionalised here.
 const STEPS: WalkthroughStep[] = [
   {
+    element: 'model-picker',
+    title: 'Choose a model first',
+    description:
+      'Nothing here can be built without one. Pick a model from this menu — or, if the list is ' +
+      'empty, add one under Providers in the account menu at the bottom of the sidebar. A model ' +
+      'your administrator configured for the deployment appears here for everyone automatically.',
+    awaitsModel: true,
+  },
+  {
     element: 'home-composer',
     title: 'Ask for something real',
     description:
       'Describe what you want in plain language — there is no template to pick first. This ' +
-      'deployment ships with sample site-visit data, so "chart the visits by site and tell me ' +
-      'what stands out" is a real thing to try. Send it and the tour picks up afterwards.',
+      'deployment ships with a "Sample: Field Reports" collection holding a quarterly site-visit ' +
+      'log, so "chart the site visits by site and tell me which ones escalate" is a real thing to ' +
+      'try. Send it and the tour picks up afterwards.',
     awaitsSend: true,
   },
   {
@@ -101,8 +113,15 @@ const STEPS: WalkthroughStep[] = [
 // disabled connector or a nav row a fork removed would highlight an empty rectangle in the corner
 // of the screen, so absence is resolved against the live DOM -- the same source of truth the rail
 // itself uses -- rather than by re-deriving deployment config here. Exported for the test.
-export function presentSteps(): DriveStep[] {
-  return STEPS.filter((step) => document.querySelector(`[data-tour="${step.element}"]`)).map(
+export function presentSteps(hasModel = true): DriveStep[] {
+  return STEPS
+    // The model step exists only to resolve "the agent cannot build anything yet". A deployment
+    // that already has a model -- whether the user added one or an administrator configured it
+    // for everyone via the gateway, which listModels() returns to all users alike -- must not be
+    // told to choose one it already has.
+    .filter((step) => !step.awaitsModel || !hasModel)
+    .filter((step) => document.querySelector(`[data-tour="${step.element}"]`))
+    .map(
     (step) => ({
       element: `[data-tour="${step.element}"]`,
       popover: {
@@ -111,7 +130,10 @@ export function presentSteps(): DriveStep[] {
         // The step the user has to act on offers no way to click past it; the others get ordinary
         // Back/Next. Leaving Next on the composer step would let someone "complete" the tour
         // without ever having asked for anything, which is the whole point of it.
-        showButtons: step.awaitsSend
+        // The two steps the user has to act on offer no way to click past them; the rest get
+        // ordinary Back/Next. A Next on either would let someone "complete" a guided build
+        // without a model, or without ever having asked for anything.
+        showButtons: step.awaitsSend || step.awaitsModel
           ? (['close'] as const).slice()
           : (['previous', 'next', 'close'] as const).slice(),
       },
@@ -126,6 +148,14 @@ function isAwaitingSend(steps: DriveStep[], index: number): boolean {
   return typeof element === 'string' && element.includes('home-composer')
 }
 
+// Whether the step at `index` is the model step. Same shape as isAwaitingSend, and both are
+// resolved against the rendered steps rather than the declaration, since the model step is dropped
+// entirely on a deployment that already has one.
+function isAwaitingModel(steps: DriveStep[], index: number): boolean {
+  const element = steps[index]?.element
+  return typeof element === 'string' && element.includes('model-picker')
+}
+
 // Runs the walkthrough for a user who has not finished it, then records that they have. Renders
 // nothing: driver.js owns its overlay, mounted on document.body.
 //
@@ -134,8 +164,29 @@ function isAwaitingSend(steps: DriveStep[], index: number): boolean {
 export default function Walkthrough({ onDone }: { onDone: () => void }) {
   const { authenticatedApi } = useAuthenticatedApi()
 
+  // Whether this deployment can build anything at all: any model the user configured, plus any the
+  // administrator configured for everyone (listModels() merges both, so an admin-provided gateway
+  // model is visible to every user without them doing anything). null = still asking.
+  const [hasModel, setHasModel] = useState<boolean | null>(null)
+
   useEffect(() => {
-    const steps = presentSteps()
+    let cancelled = false
+    authenticatedApi.listModels()
+      .then((models) => { if (!cancelled) setHasModel(models.length > 0) })
+      .catch((err) => {
+        logRpcFailure('Failed to check configured models:', err)
+        // Assume a model exists, which drops the step. Wrongly showing "choose a model" to someone
+        // who has one is worse than omitting it: it sends them to fix something that is not broken.
+        if (!cancelled) setHasModel(true)
+      })
+    return () => { cancelled = true }
+  }, [authenticatedApi])
+
+  useEffect(() => {
+    // Wait for the answer rather than starting on an assumption and re-driving: restarting the
+    // tour a beat after it appeared reads as a glitch.
+    if (hasModel === null) return
+    const steps = presentSteps(hasModel)
     // Nothing to point at (a fork with a different rail, or the rail not yet painted). Treat it as
     // done rather than retrying: a tour that highlights nothing is worse than no tour.
     if (steps.length === 0) {
@@ -218,7 +269,18 @@ export default function Walkthrough({ onDone }: { onDone: () => void }) {
     }
     window.addEventListener(WALKTHROUGH_SENT_EVENT, onSent)
 
+    // The model step advances the same way, on a real choice rather than a button.
+    const onModel = () => {
+      if (!isAwaitingModel(steps, tour.getActiveIndex() ?? 0)) return
+      const next = (tour.getActiveIndex() ?? 0) + 1
+      if (next >= steps.length) { finish(); return }
+      writeProgress(next)
+      tour.drive(next)
+    }
+    window.addEventListener(WALKTHROUGH_MODEL_EVENT, onModel)
+
     return () => {
+      window.removeEventListener(WALKTHROUGH_MODEL_EVENT, onModel)
       window.removeEventListener(WALKTHROUGH_SENT_EVENT, onSent)
       document.removeEventListener('click', remember, true)
       document.removeEventListener('keyup', remember, true)
@@ -229,7 +291,7 @@ export default function Walkthrough({ onDone }: { onDone: () => void }) {
       finished = true
       if (tour.isActive()) tour.destroy()
     }
-  }, [authenticatedApi, onDone])
+  }, [authenticatedApi, onDone, hasModel])
 
   return null
 }

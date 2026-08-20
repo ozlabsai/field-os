@@ -21,7 +21,7 @@ import {
 } from "../modelSelection";
 import { useDocumentTitle } from "../useDocumentTitle";
 import { homePromptFromSearch } from "../homePrompt";
-import { notifyWalkthroughSent } from "../walkthroughBus";
+import { notifyWalkthroughSent, notifyWalkthroughModel } from "../walkthroughBus";
 
 type HomeSearch = { prompt?: string };
 
@@ -81,6 +81,9 @@ export function HomePageContent({ prompt }: HomeSearch) {
   const handleModelChange = useCallback((value: string | null) => {
     setSelectedModel(value);
     persistSelectedModel(value);
+    // Only a real choice advances the walkthrough's model step; "No agent" (null) leaves the
+    // deployment unable to build anything, which is the state that step exists to resolve.
+    if (value !== null) notifyWalkthroughModel();
   }, []);
 
   // Pre-create a provisional gadget as soon as the user starts interacting, so that navigation

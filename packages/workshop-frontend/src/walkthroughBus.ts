@@ -9,3 +9,13 @@ export const WALKTHROUGH_SENT_EVENT = 'gadgets:walkthrough-sent'
 export function notifyWalkthroughSent(): void {
   window.dispatchEvent(new CustomEvent(WALKTHROUGH_SENT_EVENT))
 }
+
+// Fired when the user picks or adds a model from the Home composer. The walkthrough's first step
+// -- shown only to a deployment with no model configured at all -- advances on this, for the same
+// reason the composer step waits on a real send: the step exists because the agent cannot build
+// anything yet, so it should not be clickable past.
+export const WALKTHROUGH_MODEL_EVENT = 'gadgets:walkthrough-model'
+
+export function notifyWalkthroughModel(): void {
+  window.dispatchEvent(new CustomEvent(WALKTHROUGH_MODEL_EVENT))
+}
