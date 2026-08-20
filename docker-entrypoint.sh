@@ -9,7 +9,25 @@
 set -eu
 
 STATE_DIR="${FIELDOS_STATE_DIR:-/var/lib/fieldos}"
-PORT="${FIELDOS_PORT:-8080}"
+# NOT plain ${FIELDOS_PORT:-8080}. Kubernetes injects legacy Docker-link service-discovery vars
+# into every pod -- for a Service named `fieldos` that is `FIELDOS_PORT=tcp://10.30.11.195:80`,
+# which collides with this variable by name. workerd then tried to bind port `NaN` and died with
+# `DNS lookup failed; params.service = NaN`, an error naming neither the variable nor the Service.
+#
+# Only a real cluster can produce this: Docker performs no such injection, so container testing is
+# structurally incapable of catching it. Accept only digits and fall back otherwise, rather than
+# trusting a name we do not exclusively own.
+case "${FIELDOS_PORT:-}" in
+  "") PORT=8080 ;;
+  *[!0-9]*)
+    # Warned rather than silently ignored: a non-numeric value is either this collision (benign,
+    # and common) or an operator typo (not benign). Saying which value was rejected is the only
+    # thing that separates them at 3am.
+    echo "entrypoint: ignoring non-numeric FIELDOS_PORT=${FIELDOS_PORT} (Kubernetes injects a" \
+         "\$SERVICE_PORT var of this name); using 8080" >&2
+    PORT=8080 ;;
+  *) PORT="$FIELDOS_PORT" ;;
+esac
 # workerd blocks private IPs by default, and an on-prem deployment's inference server, MCP hosts
 # and IdP are all on RFC1918 space. `public,private` is the blunt grant; narrow it per role with
 # FIELDOS_INTERNAL_HOSTS (see docs/configuration.md), which the chart surfaces as a value.
