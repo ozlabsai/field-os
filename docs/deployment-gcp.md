@@ -156,6 +156,23 @@ anything it should not, but not from refusing to stop. The kubelet restarts the 
 `/healthz` fails. `terminationGracePeriodSeconds` is deliberately low: a wedged workerd ignores
 SIGTERM, so SIGKILL is the normal path rather than an escalation.
 
+## Gotchas found on a real cluster
+
+**Do not name a value after your Service.** Kubernetes injects legacy Docker-link service-discovery
+variables into every pod in a namespace: a Service named `fieldos` produces
+`FIELDOS_PORT=tcp://10.30.11.195:80`, which collided with the entrypoint's own `FIELDOS_PORT` and
+crashed workerd with `DNS lookup failed; params.service = NaN`. The entrypoint now rejects
+non-numeric values, but the general lesson applies to anything you add: the kubelet owns the
+`<SERVICE_NAME>_*` namespace, not you.
+
+**On GKE, the Ingress's nginx annotations do nothing.** GKE's ingress controller reads backend
+behaviour from a `BackendConfig` CRD, so set `ingress.backendConfig.enabled=true`. Without it the
+load balancer applies its default 30s backend timeout and drops the workspace WebSocket; because
+the frontend reconnects with backoff, the symptom is periodic disconnects rather than a timeout.
+
+**The image is large (~2.4GB), so the first pull on each node is slow.** A pod rescheduled onto a
+fresh node takes several minutes before it is Ready. This is not a hang.
+
 ## Known limitations
 
 - **No PDF export** — needs a `BROWSER` binding that does not exist off-platform. Degrades cleanly.
