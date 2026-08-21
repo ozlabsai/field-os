@@ -107,6 +107,21 @@ config:
   # Sign-in gatekeepers, as a JSON array, e.g. '["oidc"]'.
   authGatekeepers: ""
 
+# A shared-secret gate in front of the WHOLE deployment (HTTP Basic, enforced in the router).
+#
+# For an Alpha on a public hostname, where the signup page would otherwise be open to anyone who
+# finds the URL. It is a deployment gate, not an identity system: it names nobody, and every FieldOS
+# account check still applies behind it. `/healthz` is exempt so probes keep working.
+#
+# Leave disabled for an airgapped install, where the network is already the boundary.
+siteGate:
+  enabled: false
+  # Name of a Secret holding a SITE_PASSWORD key, formatted `user:password`. Referenced rather than
+  # inlined so the credential is not in your values file or in Helm's release history:
+  #   kubectl create secret generic fieldos-site-gate -n fieldos \
+  #     --from-literal=SITE_PASSWORD='user:password'
+  existingSecret: ""
+
 # Private CA for internal HTTPS services whose certificates chain to a customer PKI -- the usual
 # case on an airgapped network, which cannot obtain a publicly-trusted certificate.
 #

@@ -557,6 +557,14 @@ for (const w of workers) {
   // port but 8787 — it fails at the *end* of a connect flow rather than at boot, so it looks like
   // the gatekeeper is broken. Mirrors the release manifest's contract (manifest-lib.mjs:187,208):
   // PUBLIC_BASE_URL on the backend, per-gatekeeper BASE_URL under the shared origin.
+  // The deployment-wide shared-secret gate, on the router because it is the only worker every
+  // request passes through. Forwarded rather than listed in INSTANCE_VARS: those go to the
+  // backend, and this one belongs to a worker that receives none of them.
+  if (pkgName === "router" && process.env.SITE_PASSWORD) {
+    bindingLines.push(
+        `      (name = "SITE_PASSWORD", text = ${capnpString(process.env.SITE_PASSWORD)}),`);
+  }
+
   if (pkgName === "workshop-backend") {
     bindingLines.push(`      (name = "PUBLIC_BASE_URL", text = ${capnpString(publicBaseUrl)}),`);
     // Instance state the deploy service injects at PUT time on a real deployment, and which no

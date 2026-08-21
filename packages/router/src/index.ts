@@ -8,16 +8,64 @@
 // The same worker doubles as the dev router (`pnpm dev-server` at the repo root): dev has no
 // `ASSETS` binding, so frontend requests fall through to the backend instead.
 
+import { constantTimeEqual } from "@gadgets/backend-utils/constant-time";
+
 export interface Env {
   WORKSHOP_BACKEND: Fetcher;
   // Present in production (wrangler.jsonc assets stanza); absent in dev.
   ASSETS?: Fetcher;
+  // Optional shared-secret gate in front of the whole deployment, as `user:password`. Unset means
+  // no gate, which is the right default for an airgapped install where the network is the boundary.
+  SITE_PASSWORD?: string;
   [key: string]: unknown;
+}
+
+// Shared-secret gate for a deployment reachable from the public internet before it is ready for
+// one -- an Alpha on a real hostname, where the signup page would otherwise be open to strangers.
+//
+// This is a DEPLOYMENT gate, not an authentication system, and it is deliberately shallow: it does
+// not identify anyone, and every FieldOS account check still applies behind it. What it buys is
+// that a stranger who finds the hostname sees a password prompt instead of a signup form.
+//
+// Basic auth specifically because it needs no cookie, no session store and no login page, and every
+// browser and `curl -u` speaks it. Over plain HTTP the credential is on the wire in base64, which
+// is why the deployment should be HTTPS -- but a gate on HTTP is still strictly better than none.
+function gateResponse(req: Request, expected: string): Response | null {
+  const header = req.headers.get("Authorization") ?? "";
+  const [scheme, encoded] = header.split(" ");
+  if (scheme?.toLowerCase() === "basic" && encoded) {
+    let supplied: string;
+    try {
+      supplied = atob(encoded);
+    } catch {
+      supplied = "";               // malformed base64 -- fall through to the challenge
+    }
+    if (constantTimeEqual(supplied, expected)) return null;
+  }
+  return new Response("Authentication required.\n", {
+    status: 401,
+    headers: {
+      // The realm is what the browser shows in its prompt.
+      "WWW-Authenticate": 'Basic realm="FieldOS", charset="UTF-8"',
+      "content-type": "text/plain",
+      // A 401 must never be cached, or a browser can pin the failure past a password change.
+      "cache-control": "no-store",
+    },
+  });
 }
 
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
+
+    // Before everything, including the asset service -- a gate that let the SPA load would still
+    // hand a stranger the signup page. `/healthz` is exempt: the kubelet and the GCE load balancer
+    // probe it without credentials, and failing them would take the deployment down rather than
+    // protect it. It returns no user data, only whether the backend worker answers.
+    if (env.SITE_PASSWORD && url.pathname !== "/healthz") {
+      const challenge = gateResponse(req, env.SITE_PASSWORD);
+      if (challenge) return challenge;
+    }
 
     for (const key of Object.keys(env)) {
       if (!key.startsWith("GATEKEEPER_")) continue;

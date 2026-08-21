@@ -66,6 +66,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ $fullName }}-config
+            {{- if .Values.siteGate.enabled }}
+            # SITE_PASSWORD, read by the router. From a Secret rather than the ConfigMap so it is
+            # not visible in `kubectl get configmap` or in Helm's stored release values.
+            - secretRef:
+                name: {{ required "siteGate.existingSecret is required when siteGate.enabled" .Values.siteGate.existingSecret }}
+            {{- end }}
           {{- if or .Values.caBundle.pem .Values.caBundle.existingSecret }}
           env:
             - name: FIELDOS_CA_BUNDLE
