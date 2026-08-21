@@ -156,6 +156,48 @@ anything it should not, but not from refusing to stop. The kubelet restarts the 
 `/healthz` fails. `terminationGracePeriodSeconds` is deliberately low: a wedged workerd ignores
 SIGTERM, so SIGKILL is the normal path rather than an escalation.
 
+## Deploying by tag (CI/CD)
+
+`git tag v0.1.0-alpha.4 && git push origin v0.1.0-alpha.4` runs the gate, builds and pushes the
+image, upgrades the release, replaces the pod and verifies the result. `.github/workflows/deploy.yml`.
+
+One-time GCP setup, from someone with project IAM admin:
+
+```sh
+scripts/setup-github-deploy.sh          # creates the WIF pool, provider and service account
+```
+
+It prints the two `gh secret set` commands to finish. Workload Identity Federation means no
+service-account key exists — GitHub mints an OIDC token and GCP exchanges it for a short-lived one.
+The provider is pinned to this repository by an `attribute-condition`; without that, any GitHub
+repository could impersonate the service account.
+
+The workflow deletes the pod explicitly and waits on a *new* UID. That is not belt-and-braces: the
+StatefulSet is `OnDelete`, so `helm upgrade` alone restarts nothing, and readiness cannot tell "the
+new pod is ready" from "the old pod was always ready".
+
+## Protecting the deployment with a shared secret
+
+For an Alpha on a public hostname, where the signup page would otherwise be open to anyone who
+finds the URL:
+
+```sh
+kubectl create secret generic fieldos-site-gate -n fieldos \
+  --from-literal=SITE_PASSWORD='user:password'
+
+helm upgrade fieldos ./charts/fieldos -n fieldos --reuse-values \
+  --set siteGate.enabled=true --set siteGate.existingSecret=fieldos-site-gate
+kubectl delete pod fieldos-0 -n fieldos     # env vars are read at pod start
+```
+
+HTTP Basic, enforced in the router in front of everything including `/api`. `/healthz` is exempt so
+the kubelet and load balancer can probe without credentials.
+
+It is a **deployment** gate, not an identity system — it names nobody, and every FieldOS account
+check still applies behind it. Note the credential crosses the wire in base64, so it is only
+meaningfully private over HTTPS. Changing it means updating the Secret **and** restarting the pod;
+the Secret alone changes nothing, because the value is read into the environment at start.
+
 ## Gotchas found on a real cluster
 
 **Do not name a value after your Service.** Kubernetes injects legacy Docker-link service-discovery
