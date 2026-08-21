@@ -72,6 +72,16 @@ describe("site gate", () => {
     expect(res.status).toBe(401);
   });
 
+  it("exempts /.well-known/ so certificate validation can reach the origin", async () => {
+    // Learned the hard way: with this gated, a GKE ManagedCertificate sat in FAILED_NOT_VISIBLE
+    // indefinitely -- the SAME status it shows while merely still provisioning, so the gate
+    // produced a symptom indistinguishable from ordinary waiting.
+    const res = await fetchWith(
+        new Request("https://os.example.com/.well-known/acme-challenge/token"),
+        env({ SITE_PASSWORD: PASSWORD }));
+    expect(res.status).not.toBe(401);
+  });
+
   it("exempts /healthz so probes keep working", async () => {
     // The kubelet and the GCE load balancer probe without credentials. Gating this would take the
     // deployment down rather than protect it -- and /healthz returns no user data.

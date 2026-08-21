@@ -59,10 +59,28 @@ export default {
     const url = new URL(req.url);
 
     // Before everything, including the asset service -- a gate that let the SPA load would still
-    // hand a stranger the signup page. `/healthz` is exempt: the kubelet and the GCE load balancer
-    // probe it without credentials, and failing them would take the deployment down rather than
-    // protect it. It returns no user data, only whether the backend worker answers.
-    if (env.SITE_PASSWORD && url.pathname !== "/healthz") {
+    // hand a stranger the signup page.
+    //
+    // Two exemptions, both for callers that CANNOT present credentials and whose failure is worse
+    // than the exposure:
+    //
+    //   /healthz                   the kubelet and the GCE load balancer probe it. Gating it takes
+    //                              the deployment down rather than protecting it, and it returns
+    //                              no user data -- only whether the backend worker answers.
+    //   /.well-known/acme-challenge  HTTP-01 certificate validation (GKE ManagedCertificate,
+    //                              Let's Encrypt, cert-manager). Gating it silently prevents TLS
+    //                              from ever being issued.
+    //
+    // The second was learned the hard way: with it gated, a managed certificate sat in
+    // FAILED_NOT_VISIBLE indefinitely, which is the SAME status a certificate shows while it is
+    // simply still provisioning. The gate produced a symptom indistinguishable from ordinary
+    // waiting, on a deployment that was otherwise entirely healthy.
+    //
+    // `/.well-known/` more broadly is reserved for exactly this class of well-known unauthenticated
+    // lookup (RFC 8615), so exempting the whole prefix is both simpler and less likely to need
+    // revisiting than enumerating one challenge type.
+    const exempt = url.pathname === "/healthz" || url.pathname.startsWith("/.well-known/");
+    if (env.SITE_PASSWORD && !exempt) {
       const challenge = gateResponse(req, env.SITE_PASSWORD);
       if (challenge) return challenge;
     }
