@@ -1,0 +1,27 @@
+{{- if .Values.ingress.redirectToHttps }}
+{{- /*
+  Redirects HTTP to HTTPS at the GCE load balancer, before the request reaches any worker.
+
+  This matters more than usual with siteGate enabled: HTTP Basic sends the credential as base64,
+  which is not encryption. A user who types the bare hostname would otherwise send the shared
+  secret in the clear before anything could tell them not to.
+
+  ONLY enable once the certificate is Active. Turning it on first makes the deployment unreachable
+  -- every request is redirected to an HTTPS endpoint that is not yet serving, which looks like an
+  outage rather than a misconfiguration. That ordering is why this is opt-in rather than a default.
+
+  301, not 302: a permanent redirect is what belongs on a scheme upgrade, and browsers cache it,
+  so a returning visitor never makes the cleartext request at all. The trade is that it is sticky
+  -- a browser that cached it will not go back to HTTP, which is the intended behaviour here but
+  worth knowing before enabling it on a deployment whose TLS might be withdrawn.
+*/}}
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: {{ include "fieldos.fullname" . }}
+  labels: {{- include "fieldos.labels" . | nindent 4 }}
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT
+{{- end }}

@@ -60,6 +60,13 @@ ingress:
   managedCertificate:
     enabled: false
 
+  # Redirect HTTP to HTTPS at the load balancer (a GKE FrontendConfig).
+  #
+  # Enable ONLY after the certificate is Active. Turning it on first redirects every request to an
+  # HTTPS endpoint that is not yet serving, which reads as an outage rather than a misconfiguration.
+  # Matters most with siteGate on: Basic auth sends its credential as base64, not encrypted.
+  redirectToHttps: false
+
 # FieldOS instance configuration. These reach the workers through the generated workerd config;
 # `run-workerd.mjs` forwards a fixed named list, so adding a key here that it does not forward has
 # no effect (see INSTANCE_VARS in that file).

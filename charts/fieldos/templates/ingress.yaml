@@ -13,6 +13,10 @@ metadata:
     # too if you use it.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    {{- if .Values.ingress.redirectToHttps }}
+    # Binds the FrontendConfig. Without this annotation the resource exists and is never consulted.
+    networking.gke.io/v1beta1.FrontendConfig: {{ include "fieldos.fullname" . }}
+    {{- end }}
     {{- if .Values.ingress.managedCertificate.enabled }}
     # Binds the ManagedCertificate. GKE reads TLS from this annotation, not from the `tls:` block.
     networking.gke.io/managed-certificates: {{ include "fieldos.fullname" . }}
