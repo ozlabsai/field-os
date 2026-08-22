@@ -142,6 +142,13 @@ transactions — `quick_check` will say `ok`. `packages/integration-tests/restor
 automates the full drill (write → back up → `kill -9` mid-write → wipe → restore → read back) and
 has been executed against a container: it passes, with a negative control confirming it can fail.
 
+## Checking it actually works
+
+A green `/healthz` means the backend isolate answered, not that the product is usable. For that, see
+[`trying-it-out.md`](./trying-it-out.md): what to enable first (a model, and the Context Library,
+neither of which is automatic), what the shipped sample data contains, and which examples have been
+run on a real deployment versus only reasoned about.
+
 ## Health and restarts
 
 The liveness probe targets `/healthz`, which reaches the **backend worker**. Do not repoint it at
