@@ -13,6 +13,9 @@ import {
 } from "@tanstack/react-router";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import SidebarItem, {
   type SidebarItemProps,
 } from "./components/AppShell/SidebarItem";
@@ -81,6 +84,30 @@ describe("presentSteps", () => {
     const [, outputs] = presentSteps();
     expect(outputs.popover?.showButtons).toContain("next");
     expect(outputs.popover?.showButtons).toContain("previous");
+  });
+
+  it("omits the model step when the deployment already has a model", () => {
+    renderAnchors(["model-picker", ...ALL]);
+    // True covers both sources: a model this user added, and one an administrator configured for
+    // the whole deployment -- listModels() returns them to every user alike.
+    const steps = presentSteps(true);
+    expect(steps.map((s) => s.element)).not.toContain(selector("model-picker"));
+    expect(steps[0].element).toBe(selector("home-composer"));
+  });
+
+  it("leads with the model step when no model is configured", () => {
+    renderAnchors(["model-picker", ...ALL]);
+    const steps = presentSteps(false);
+    expect(steps[0].element).toBe(selector("model-picker"));
+    // Nothing can be built without one, so there is no clicking past it.
+    expect(steps[0].popover?.showButtons).toEqual(["close"]);
+  });
+
+  it("drops the model step when the composer is not on screen to host it", () => {
+    // No model AND no picker anchor: the DOM filter still governs, so the tour does not point at
+    // a control this page does not render.
+    renderAnchors(["nav-outputs"]);
+    expect(presentSteps(false).map((s) => s.element)).toEqual([selector("nav-outputs")]);
   });
 
   it("carries the popover copy for each surviving step", () => {
@@ -154,5 +181,38 @@ describe("presentSteps against the real SidebarItem", () => {
   it("drops the nav steps whose real rows this deployment does not render", async () => {
     await renderRows(["/outputs"]);
     expect(presentSteps().map((s) => s.element)).toEqual([selector("nav-outputs")]);
+  });
+});
+
+// The composer step names the seeded collection by title, and that collection is committed data in
+// a DIFFERENT package (gatekeeper-context/seed-context). Nothing links the two, so a rename there
+// leaves the tour advertising a collection the deployment does not have -- and a fork swapping the
+// data via SEED_CONTEXT_DIR is a documented, supported thing to do. Read the real file rather than
+// restate its title, so the drift fails here instead of in front of a new user.
+describe("the composer step matches the seeded data", () => {
+  const seedDir = join(
+    __dirname, "..", "..", "gatekeeper-context", "seed-context", "acme-field-report",
+  );
+
+  function composerDescription() {
+    document.body.innerHTML = '<a data-tour="home-composer">anchor</a>';
+    const [step] = presentSteps();
+    document.body.innerHTML = "";
+    return String(step.popover?.description ?? "");
+  }
+
+  it("quotes the collection's real title", () => {
+    const { title } = JSON.parse(readFileSync(join(seedDir, "collection.json"), "utf8"));
+    expect(composerDescription()).toContain(title);
+  });
+
+  it("suggests a request the seeded document can actually answer", () => {
+    const doc = readFileSync(join(seedDir, "site-visits.md"), "utf8");
+    // The prompt asks to chart by site and say which escalate; both have to exist in the data.
+    expect(doc).toContain("| Site |");
+    expect(doc).toContain("Escalated");
+    const description = composerDescription();
+    expect(description).toContain("site visits by site");
+    expect(description).toContain("escalate");
   });
 });
