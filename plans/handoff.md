@@ -5,6 +5,10 @@ Written 2026-08-10, last updated 2026-08-20. What is done, what is true, and wha
 The living design is [`fieldos.md`](./fieldos.md); the append-only record is
 [`fieldos-log.md`](./fieldos-log.md). This file is the orientation layer: read it first, then those.
 
+The deployment layer has its own orientation file:
+[`handoff-deployment.md`](./handoff-deployment.md) — FieldOS running on GKE at os.ozlabs.ai, what is
+proven about it, and the traps that only appear on a real cluster.
+
 Two process docs matter as much as the design:
 [`docs/testing.md`](../docs/testing.md) (the tiers, and the cherry-pick gate) and
 [`docs/upstream-sync.md`](../docs/upstream-sync.md) (how we take upstream changes, and why "watch
