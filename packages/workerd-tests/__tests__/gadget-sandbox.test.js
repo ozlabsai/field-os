@@ -106,6 +106,79 @@ function gadgetSource() {
  *
  * Reports rather than asserts, so a surprising answer is still an answer.
  */
+/**
+ * Reports on several kinds of argument, to find one that survives the loader.
+ *
+ * The question is not just "is the callback broken" (answered: yes, it arrives as a plain Object)
+ * but "what CAN cross", because that determines whether the fix is a conversion at the boundary or
+ * a new mechanism. Reports rather than asserts.
+ */
+function argSurvivalProbeSource() {
+  return `
+    import { DurableObject } from "cloudflare:workers";
+
+    export class Gadget extends DurableObject {
+      async probeArgs(capnwebStub, workersEntrypoint, plainFn) {
+        const describe = (v) => ({
+          type: typeof v,
+          ctor: v?.constructor?.name ?? null,
+          callable: typeof v === "function",
+          keys: (() => { try { return Object.getOwnPropertyNames(v ?? {}).slice(0,6); } catch { return null; } })(),
+        });
+        const report = { alive: "gadget-ran" };
+        report.capnwebStub = describe(capnwebStub);
+        report.workersEntrypoint = describe(workersEntrypoint);
+        report.plainFn = describe(plainFn);
+        // Can any of them actually be CALLED back?
+        try { await workersEntrypoint.ping(); report.entrypointCallable = "yes"; }
+        catch (e) { report.entrypointCallable = String(e).slice(0,90); }
+        // The decisive one: can a bare function argument actually be CALLED back, and can it be
+        // retained past the end of this call (which is what a subscription needs)?
+        try { report.fnResult = await plainFn("hello"); }
+        catch (e) { report.fnResult = "THREW " + String(e).slice(0,90); }
+        try { report.fnHasDup = typeof plainFn.dup; }
+        catch (e) { report.fnHasDup = "THREW"; }
+        try { const d = plainFn.dup(); report.fnDupCallable = typeof d; }
+        catch (e) { report.fnDupError = String(e).slice(0,90); }
+        return report;
+      }
+    }
+  `;
+}
+
+/**
+ * A gadget implementing the real subscription pattern, with a FUNCTION callback.
+ *
+ * This is the end-to-end shape: retain the callback past the end of subscribe() with dup(), then
+ * invoke it later from a separate call. If this works, gadget live-updates work.
+ */
+function subscriptionGadgetSource() {
+  return `
+    import { DurableObject } from "cloudflare:workers";
+
+    export class Gadget extends DurableObject {
+      #subs = [];
+
+      async subscribe(callback) {
+        // The pattern agent.ts documents, with a function rather than an object.
+        const kept = callback.dup();
+        this.#subs.push(kept);
+        return { subscribed: true, count: this.#subs.length };
+      }
+
+      async notify(payload) {
+        let delivered = 0;
+        const errors = [];
+        for (const cb of this.#subs) {
+          try { await cb(payload); delivered++; }
+          catch (e) { errors.push(String(e).slice(0, 120)); }
+        }
+        return { alive: "gadget-ran", subs: this.#subs.length, delivered, errors };
+      }
+    }
+  `;
+}
+
 function callbackProbeSource() {
   return `
     import { DurableObject } from "cloudflare:workers";
@@ -291,4 +364,73 @@ test.skip("a callback stub keeps dup() when it crosses into the loaded worker (O
   expect(report.dupError, `callback stub as the gadget sees it: ${seen}`).toBeUndefined();
   expect(report.hasDup, `callback stub as the gadget sees it: ${seen}`).toBe("function");
   expect(report.dupUsable, `dup() returned something unusable: ${seen}`).toBe(true);
+}, 120_000);
+
+test("PROBE: what kinds of argument survive the loader boundary", async () => {
+  // Diagnostic, not a guard. OZL-134 established that a Cap'n Web callback arrives as a plain
+  // Object; this asks what DOES cross, which decides whether the fix is a conversion at the
+  // boundary or a new mechanism.
+  const [username] = nextUsernames("argprobe");
+  const api = connect(stack.url);
+  const authed = await signUp(api, username);
+  const overseer = await authed.newGadget();
+  const gadget = await overseer.createGadget("Arg Probe", undefined, "ARG");
+  const gadgetId = await gadget.getId();
+
+  const doc = new Y.Doc();
+  doc.transact(() => {
+    const text = new Y.Text();
+    text.insert(0, argSurvivalProbeSource());
+    doc.getMap(String(gadgetId)).set("server.js", text);
+  });
+  await overseer.updateCode(Y.encodeStateAsUpdateV2(doc));
+
+  /** @type {any} */
+  const connected = await gadget.connectToGadget();
+
+  const report = await connected.probeArgs(
+    { update() {} },                 // a plain object the client passes as a callback
+    { ping: async () => "pong" },    // an object with an async method
+    () => "called",                  // a bare function
+  );
+
+  expect(report.alive).toBe("gadget-ran");
+  // eslint-disable-next-line no-console
+  console.log("ARG SURVIVAL:", JSON.stringify(report, null, 2));
+}, 120_000);
+
+test("a gadget can retain a function callback and call it back later (OZL-134 end to end)", async () => {
+  // The whole feature: subscribe with a function, retain it past the call with dup(), then deliver
+  // an update from a LATER call. This is what every live-updating gadget needs, and what the
+  // original report found broken.
+  const [username] = nextUsernames("subscribe");
+  const api = connect(stack.url);
+  const authed = await signUp(api, username);
+  const overseer = await authed.newGadget();
+  const gadget = await overseer.createGadget("Subscription", undefined, "SUB");
+  const gadgetId = await gadget.getId();
+
+  const doc = new Y.Doc();
+  doc.transact(() => {
+    const text = new Y.Text();
+    text.insert(0, subscriptionGadgetSource());
+    doc.getMap(String(gadgetId)).set("server.js", text);
+  });
+  await overseer.updateCode(Y.encodeStateAsUpdateV2(doc));
+
+  /** @type {any} */
+  const connected = await gadget.connectToGadget();
+
+  const received = [];
+  const sub = await connected.subscribe((payload) => { received.push(payload); });
+  expect(sub.subscribed).toBe(true);
+
+  // A SEPARATE call, after subscribe() returned. Without dup() the stub is disposed by now and
+  // this delivers nothing -- which is precisely the silent failure OZL-134 describes.
+  const result = await connected.notify({ shifts: 3 });
+
+  expect(result.alive).toBe("gadget-ran");
+  expect(result.errors, `gadget reported errors: ${JSON.stringify(result.errors)}`).toEqual([]);
+  expect(result.delivered, `gadget saw ${result.subs} subscriber(s)`).toBe(1);
+  expect(received, "the callback never fired in the client").toEqual([{ shifts: 3 }]);
 }, 120_000);
