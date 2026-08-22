@@ -133,8 +133,14 @@ spec:
           # armed only for the hour after install.sh runs, and a later tag queues forever behind a
           # CrashLoopBackOff. See entrypoint.sh for why the reasons for ephemeral do not hold.
           env:
+            # A STABLE name, not the pod name. `config.sh --replace` replaces an existing
+            # registration of the same name, so a fixed name means each new pod takes over the old
+            # one's slot. With the pod name (which changes every rollout) there was nothing to
+            # replace, and a replaced pod left its registration behind showing `online` -- GitHub
+            # would then route a job to a runner that no longer exists, and it would hang.
+            # Observed on the rollout that removed --ephemeral: one pod, two online registrations.
             - name: RUNNER_NAME
-              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+              value: fieldos-gke-deploy
             # A registration token is single-use and expires in ~60 minutes; it is consumed at
             # startup. install.sh refreshes this Secret each time it runs.
             - name: RUNNER_TOKEN

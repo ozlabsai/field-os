@@ -34,9 +34,13 @@ RUNNER_LABELS="${RUNNER_LABELS:-fieldos-gke}"
   --labels "${RUNNER_LABELS}" \
   --work   "${RUNNER_WORKDIR:-/home/runner/_work}"
 
-# Unregister on SIGTERM so a `kubectl delete pod` does not leave a phantom offline runner behind
-# that GitHub will still try to schedule onto.
-cleanup() { ./config.sh remove --token "${RUNNER_TOKEN}" || true; }
-trap cleanup EXIT INT TERM
+# No unregister-on-exit trap. `config.sh remove` needs a *removal* token, and RUNNER_TOKEN is a
+# registration token already consumed at startup -- so the obvious trap fails silently and the
+# `|| true` hides it. Minting a removal token would mean storing GitHub API credentials in the pod.
+#
+# The stable RUNNER_NAME in runner.yaml solves it without any of that: `--replace` above makes each
+# new pod take over the previous registration of the same name, so a replaced pod cannot leave a
+# phantom behind. install.sh additionally prunes any `offline` registrations left by earlier
+# versions of this deployment.
 
 ./run.sh
