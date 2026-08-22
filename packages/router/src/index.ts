@@ -16,6 +16,17 @@ export interface Env {
   ASSETS?: Fetcher;
   // Optional shared-secret gate in front of the whole deployment, as `user:password`. Unset means
   // no gate, which is the right default for an airgapped install where the network is the boundary.
+  //
+  // On a Kubernetes deployment, treat this as known to anyone with repo write access. Helm needs
+  // `list` on secrets, and a Kubernetes list returns full object bodies including `data` -- so a
+  // deploy runner reads every secret in the namespace whether or not it was granted `get`.
+  // Measured on the live cluster, not inferred: `kubectl auth can-i get secret/...` answered "no"
+  // while a collection list returned the value in a 200 body. RBAC cannot express the difference;
+  // an external secret store (Secret Manager via CSI) is the only fix if it ever matters.
+  //
+  // It does not matter today, because this is a deployment gate rather than an authentication
+  // system (see below) -- but do not build anything on the assumption that the value is held
+  // tightly.
   SITE_PASSWORD?: string;
   [key: string]: unknown;
 }
