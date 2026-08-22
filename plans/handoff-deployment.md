@@ -99,8 +99,8 @@ and the `keys.json` guard.
    `--allow public,private`, so workers can reach the whole internet and the hosted model providers
    genuinely work. Intended for a demo; wrong for a deployment meant to demonstrate the airgapped
    product. `FIELDOS_INTERNAL_HOSTS` narrows it per role.
-4. **Rehearse restore against the live volume.** The rehearsal ran against a scratch volume. The
-   procedure in `docs/deployment-gcp.md` has not been executed against real user data.
+4. ~~**Rehearse restore against the live volume.**~~ **Done 2026-08-23**, and it passed. See
+   "The restore drill, executed" below.
 5. **Image size**, if cold-node pull time becomes a complaint. See point 5 above for why
    `pnpm --prod` is the wrong lever.
 
@@ -189,6 +189,42 @@ signal anywhere.
 The shared shape: **absence of a log is indistinguishable from absence of a problem**, which is the
 same rule this file's traps section states for interventions. `ERROR_REPORTER` is unbound in the
 workerd stack, so all `reportIssue()` sites are no-ops, and stdout has no retention.
+
+## The restore drill, executed
+
+Run against the **live** volume on 2026-08-23, with real user data on it (a gadget built in the
+first user session, plus the seeded context collection). Previously only a scratch volume had been
+used, which is what the handoff flagged.
+
+```
+fingerprint before : a9aea70d53f4…  rows=3
+  backed up 59/59 databases + keys.json (1.3M), VACUUM INTO
+  wiped do-disk -> 0 directories
+  restored with the documented command: cp -R <backup>/*-* do-disk/
+  restored dirs: 24
+fingerprint after  : a9aea70d53f4…  rows=3
+RESULT: PASS -- content identical across wipe and restore
+```
+
+Deployment verified 9/9 afterwards; `keys.json` byte-identical at 1967 bytes.
+
+**Verified by content, not by structure.** `docs/deployment-gcp.md` says to verify by opening a
+workspace rather than by `quick_check` or row counts, because a torn WAL pair restores, opens, and
+passes structural checks while missing its most recent transactions. A script cannot open the UI, so
+the substitute is a SHA256 over every key/value of a real gadget's KV table, captured before and
+required to match after. Row counts and `quick_check` both pass on a torn pair; a content hash does
+not. Negative control: the fingerprint function throws `file is not a database` on a non-SQLite
+file, so it reports a bad read rather than returning something.
+
+**One deliberate departure from the documented procedure.** It wipes `do-disk` between backup and
+restore, so a bad backup destroys the only real user data with no recovery path. The drill takes a
+safety copy of the live directory before wiping and restores it automatically if the fingerprint
+does not match. One extra `cp` turns an irreversible drill into a reversible one — worth adding to
+the operator procedure, not just the drill.
+
+The drill script is `restore-drill.sh` in the session scratch; it is not committed because it hard
+codes one gadget's database path. What is worth keeping is the *method*: fingerprint real content,
+keep a safety copy, and verify by comparing hashes rather than by the restore not erroring.
 
 ## Traps that have already cost time
 
@@ -288,7 +324,8 @@ edit to `CLAUDE.md` reaches nobody but you.
 ## Deliberate limitations, stated so they are not rediscovered
 
 - **Nothing about the *product* has been exercised beyond signup.** See "what to pick up next".
-- **The restore procedure has not been run against the live volume**, only a scratch one.
+- ~~The restore procedure has not been run against the live volume.~~ **Executed 2026-08-23
+  against real user data and verified by content.**
 - **`config.publicUrl` is a warning, not a requirement.** A deployment with no connectors genuinely
   does not need it, and the chart derives it from `ingress.host` in the case that matters. The
   mitigation is visibility: the resolved origin prints at startup, flagged as a default when unset.
