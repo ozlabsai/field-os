@@ -40,6 +40,17 @@ kubectl create secret generic runner-registration \
 kubectl rollout restart deployment/deploy-runner -n fieldos-ci
 kubectl rollout status  deployment/deploy-runner -n fieldos-ci --timeout=180s
 
+# Ephemeral runners that were replaced mid-life (a rollout, a node drain) leave an `offline`
+# registration behind: the entrypoint's SIGTERM cleanup cannot unregister with a token the next
+# pod has already consumed. Harmless -- GitHub never schedules to an offline runner -- but they
+# accumulate, so prune them here rather than letting the list fill with ghosts.
+echo "==> pruning offline runner registrations"
+pruned=0
+for id in $(gh api "repos/${REPO}/actions/runners" -q '.runners[] | select(.status=="offline") | .id' 2>/dev/null); do
+  gh api -X DELETE "repos/${REPO}/actions/runners/${id}" 2>/dev/null && pruned=$((pruned+1))
+done
+echo "    pruned ${pruned} offline registration(s)"
+
 echo "==> confirming the runner actually registered with GitHub"
 # Rollout success only proves the container is UP. A runner that started but failed to register is
 # a pod that looks perfectly healthy and will never pick up a job -- silence indistinguishable
