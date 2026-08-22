@@ -162,6 +162,34 @@ Rejected alternatives, with the reasons that still stand:
 The three manual commands in `docs/deployment-gcp.md` still work and remain the fallback if the
 runner is down.
 
+## Evidence for OZL-229, gathered the hard way
+
+Three concrete instances from the first real user session, worth having in one place because the
+ticket is otherwise an argument that logging *would be* useful rather than a record of what its
+absence cost.
+
+**A user-facing dead end produced zero log lines.** A message sent with no model selected created a
+chat and no agent run. 48 log lines on the pod at the time, not one inference-related. From the
+server it was impossible to distinguish "the request failed" from "no request was ever made" — on a
+live dead end a user was actively stuck in.
+
+**The only evidence a deployment step succeeded was a log line, and logs do not survive a deploy.**
+`context.seed.install.ok` (`collectionKey: sample-field-reports`, `documentCount: 2`) confirmed the
+Context Library seeded — then the pod was replaced for the next release and the line was gone.
+Re-establishing the same fact afterwards took a content search across 24 DO directories, and only
+recovered the registry pointers (`publicCollections:…`, `observedCollection:…`), not the documents.
+Nothing was lost; the *record* was.
+
+**A gadget that renders nothing logs nothing.** The pod sat at 6m CPU with a broken gadget, no error
+in the log, and the frontend's in-iframe error channel silent. The failing path (OZL-134) throws
+inside a Proxy wrapper whose whole purpose is to route exceptions to the gadget console, and the
+throw happened *before* that wrapper could act. Correct behaviour from every component, and no
+signal anywhere.
+
+The shared shape: **absence of a log is indistinguishable from absence of a problem**, which is the
+same rule this file's traps section states for interventions. `ERROR_REPORTER` is unbound in the
+workerd stack, so all `reportIssue()` sites are no-ops, and stdout has no retention.
+
 ## Traps that have already cost time
 
 **Run the verification *before* the change, and predict what it will say.** The post-deploy check
