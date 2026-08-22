@@ -127,7 +127,16 @@ this: it is a property of the cluster, not of the YAML, and only running it surf
 image, uninterrupted. The step ordering (upgrade before any pod mutation) is what made a failed
 deploy a no-op instead of a half-applied one.
 
-**Fixed 2026-08-22 by an in-cluster runner** (`deploy/ci-runner/`, PR #128). The important
+**Fixed and proven 2026-08-22 by an in-cluster runner** (`deploy/ci-runner/`, PR #128).
+`v0.1.0-alpha.7` ran the full workflow end to end — gate, build, push, **helm upgrade**, pod
+replacement, verify — all green, and `Helm upgrade` is the exact step `alpha.6` died on. The
+runner's first job was a real release, not a rehearsal. Independently verified afterwards
+(9/9: image tag, readiness, the public edge through gate and TLS, the SPA shell, and
+`keys.json` byte-identical at 1967 bytes with all 24 DO directories intact). The ephemeral
+cycle also held: the runner took one job, exited, and the Deployment restarted it back to
+`Listening for Jobs` within a minute.
+
+The important
 discovery, which narrowed the work considerably: **a pod in the cluster reaches the API server
 through `kubernetes.default.svc` and never consults Master Authorized Networks at all** — no VM, no
 NAT, no allowlist change, no service-account key. Verified by execution with both halves measured:
