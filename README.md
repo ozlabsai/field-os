@@ -6,6 +6,10 @@ run entirely on customer infrastructure with no internet access and no Cloudflar
 endpoint. See [`plans/fieldos.md`](plans/fieldos.md) for what diverges and why, and
 [`docs/upstream-sync.md`](docs/upstream-sync.md) for how changes are pulled inward.
 
+Once a deployment is up, [`docs/trying-it-out.md`](docs/trying-it-out.md) is a list of things to
+actually try in it — grounded in the sample data the deployment ships with, and marked with whether
+each one has been run on a real deployment or only reasoned about.
+
 The description below is upstream's and still describes the shared architecture. It is deliberately
 left close to the original: this is a fork that cherry-picks inward, so gratuitous rewording here
 becomes a permanent merge conflict.
