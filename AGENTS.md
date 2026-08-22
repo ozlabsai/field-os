@@ -162,6 +162,35 @@ check that cannot fail is worse than no check. Prove each assertion discriminate
 red against the state it is meant to reject — and for a string match, confirm the string is absent
 from the old build rather than merely present in the new one.
 
+Generalised, because it recurred the same day in a form with no strings in it: **an assertion that
+happens to be true is not the same as one that could only be true.** A blank pane was attributed to
+the iframe branch because it showed no text — correct, but three other branches are also textless,
+including a stuck spinner, so the reasoning did not exclude them. The repair was to find a property
+only one branch has: the pane was *white on a dark host*, and the iframe is the sole separate
+document (`createSandboxedHtml` emits a bare `<html><body>` with no background), so every themed
+React branch would have been dark. Same defect as the grep, same check in both cases — **ask what
+else could produce this result, and if the answer is anything plausible, the assertion is not
+discriminating yet.**
+
+**Observing and explaining are different acts with different failure rates — label which one you
+are doing.** Counted over a single day: observations held almost without exception; *mechanisms*
+were wrong four times from this project's own sessions (a missing `client.js` that existed, a
+missing empty state that shipped, `useState(null)` as "the default" when the state is hydrated after
+mount, and `executeCode` "returning no output" when its handler returns `toolResult(output, …)`) and
+three times from the coding agent under test (`dup()` "unavailable in all contexts" — wrong about
+capnweb; a `finish` tool that does not exist; the same `executeCode` claim).
+
+This is not the rule above restated. That one is about *how you obtained* a claim — ran it, or
+reasoned it. This one is about *what kind of claim it is* — what happened, or why. They come apart
+in the case that keeps biting: an execution-backed observation supporting an inferred mechanism that
+is wrong. Every wrong mechanism above cited real, correctly-quoted code. That is what makes them dangerous: the
+evidence is sound and the inference from it is not. So state the measurement separately from what
+you think it means, and mark the second — it is far likelier to be wrong and far cheaper for someone
+else to correct when it is flagged. This applies to *anything* reporting on a system, including an
+agent under test: treat its account of what happened as evidence and its account of why as a
+hypothesis. Doing so is not hedging; it puts the low-failure-rate claim where it survives the
+high-failure-rate one collapsing.
+
 **Grep is not a search.** A character class missing `_` hid two services and produced a confident
 false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
 declarations *inside a prompt template literal*. Resolve imports rather than matching names, and

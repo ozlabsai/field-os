@@ -982,6 +982,27 @@ export function sanitizeCommandPosition(request: SlashCommandRequest): number | 
   return position;
 }
 
+// Can `.catch()` be attached to this value? Used by the gadget-facet Proxy, which wraps every
+// method to route exceptions to the gadget's console log and so must know which results are
+// promises.
+//
+// Not every property on a stub is an RPC call. Cap'n Web's lifecycle methods -- `dup()`,
+// `onRpcBroken()`, `map()` -- return synchronously, and attaching `.catch()` to what they return
+// throws `result.catch is not a function` *before* the call does anything. That silently broke
+// every gadget subscription: `agent.ts` instructs the agent to call `callback.dup()` so a callback
+// stub outlives `subscribe()`, and without it the stub is disposed on return and the subscription
+// never delivers. The gadget then renders nothing, forever, having reported success.
+//
+// This asks about the value rather than the method name deliberately. Cap'n Web's own proxy keys
+// on `prop in RpcPromise.prototype` (`capnweb/dist/index.js`), and copying that here would make
+// the kernel track an upstream internal: a synchronous stub method added later would silently stop
+// being covered, and we would learn about it when a gadget broke the same way. "Is this catchable?"
+// is the only question the call site needs answered, and the value answers it without a list to
+// maintain.
+export function isCatchable(value: unknown): value is Promise<unknown> {
+  return typeof (value as {catch?: unknown} | null | undefined)?.catch === "function";
+}
+
 // Drops format refs the message text doesn't back up. They're display-only and come from the
 // browser, so a bad one costs a chip, not the message. But a chip *replaces* the text it covers,
 // so a ref must cover exactly the noun it names -- or it could hide what the user really wrote.
@@ -2446,7 +2467,11 @@ class OverseerImpl implements AgentHooks {
         //   possibly a runtime bug which needs investigation.
         // TODO: Fix exception reporting it tail workers so we can remove this hack.
         return (...args: any[]) => {
-          let result: Promise<any> = Reflect.apply(method, target, args);
+          let result = Reflect.apply(method, target, args);
+
+          // Not every property reached here is an RPC call, so not every result is catchable.
+          if (!isCatchable(result)) return result;
+
           return result.catch((err: any) => {
             let msg = err;
             if (err instanceof Error) {
