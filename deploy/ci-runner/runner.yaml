@@ -1,0 +1,159 @@
+# The in-cluster GitHub Actions runner for the deploy pipeline.
+#
+# WHY THIS EXISTS: the GKE cluster has Master Authorized Networks enabled, allowlisting only the
+# operator's own CIDRs. A GitHub-hosted runner draws from a huge, shifting IP pool and cannot be
+# allowlisted meaningfully, so `helm upgrade` failed with "Kubernetes cluster unreachable" while
+# every step before it succeeded. A pod inside the cluster reaches the API server through
+# kubernetes.default.svc and never consults that allowlist at all -- verified by execution
+# 2026-08-22: in-cluster /version returned 200 while the external endpoint timed out.
+#
+# Apply with deploy/ci-runner/install.sh, which supplies the registration token.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fieldos-ci
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deploy-runner
+  namespace: fieldos-ci
+---
+# Scoped to the fieldos namespace. The runner deletes fieldos-0; it lives in fieldos-ci and so
+# cannot delete itself, which is the whole reason for the separate namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deploy-runner
+  namespace: fieldos
+rules:
+  # Replacing the pod is what applies a release: the StatefulSet is OnDelete, so `helm upgrade`
+  # alone restarts nothing. `create` covers the `kubectl run` verification pod at the end.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete", "create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Helm rewrites the StatefulSet template on upgrade.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # Helm reconciles everything the chart owns and must read them to compute a diff.
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update", "patch", "create"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "update", "patch", "create"]
+  - apiGroups: ["cloud.google.com"]
+    resources: ["backendconfigs"]
+    verbs: ["get", "list", "watch", "update", "patch", "create"]
+  - apiGroups: ["networking.gke.io"]
+    resources: ["managedcertificates", "frontendconfigs"]
+    verbs: ["get", "list", "watch", "update", "patch", "create"]
+  # SECURITY NOTE, deliberate and measured -- do not "tighten" this without reading it.
+  #
+  # Helm stores release state as Secrets in this namespace and must `list` them to enumerate
+  # revisions. A Kubernetes `list` returns every object's FULL BODY, including `data`, and there is
+  # no way to filter fields out of a list response. So this rule grants read of every secret in
+  # `fieldos` -- including `fieldos-site-gate`, which holds SITE_PASSWORD.
+  #
+  # `kubectl auth can-i get secret/fieldos-site-gate` answers "no" for this Role and that answer is
+  # MISLEADING: verified by execution 2026-08-22, a SA with only collection `list` received the
+  # site gate password in a 200 response body. resourceNames cannot help -- helm must `create` the
+  # next revision, whose name does not exist at admission time.
+  #
+  # Accepted rather than engineered around: this is the same authority the operator's own kubectl
+  # already holds, and per plans/handoff-deployment.md the gate is "a deployment gate, not an
+  # identity system". The real exposure is that repo-write now implies gate-password read. If that
+  # becomes unacceptable, move SITE_PASSWORD to Secret Manager via the CSI driver rather than
+  # trying to express this as RBAC, which cannot express it.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deploy-runner
+  namespace: fieldos
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deploy-runner
+subjects:
+  - kind: ServiceAccount
+    name: deploy-runner
+    namespace: fieldos-ci
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-runner
+  namespace: fieldos-ci
+spec:
+  # One runner. Two would race for the same job and the deploy workflow's concurrency group
+  # already serialises releases; a second replica buys nothing and risks overlap.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: deploy-runner }
+  template:
+    metadata:
+      labels: { app: deploy-runner }
+    spec:
+      serviceAccountName: deploy-runner
+      # The runner must not land on a node it is about to disrupt, and must never be co-scheduled
+      # with the workload whose pod it deletes.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values: ["fieldos"]
+              topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsNonRoot: true
+        # 1001 was a guess and was wrong. The image runs as `runner`, APP_UID=1654 -- read from
+        # the published image config rather than assumed. A mismatched UID here means the runner
+        # cannot write its own _work directory.
+        runAsUser: 1654
+        fsGroup: 1654
+      containers:
+        - name: runner
+          image: IMAGE_PLACEHOLDER
+          # No `args`: the image has Cmd=/bin/bash and no entrypoint of its own, so registration
+          # is done by our entrypoint.sh (which passes --ephemeral to config.sh). Ephemeral means
+          # the runner takes ONE job then exits, and the Deployment restarts it clean -- a
+          # long-lived runner would carry the previous release's leftovers into the next one.
+          env:
+            - name: RUNNER_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            # A registration token is single-use and expires in ~60 minutes; it is consumed at
+            # startup. install.sh refreshes this Secret each time it runs.
+            - name: RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef: { name: runner-registration, key: token }
+            - name: GITHUB_REPO_URL
+              value: https://github.com/ozlabsai/field-os
+            - name: RUNNER_LABELS
+              value: fieldos-gke
+            - name: RUNNER_WORKDIR
+              value: /home/runner/_work
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: work, mountPath: /home/runner/_work }
+      volumes:
+        - name: work
+          emptyDir: {}

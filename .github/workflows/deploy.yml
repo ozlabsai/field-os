@@ -14,9 +14,11 @@ on:
 # Workload Identity Federation exchanges for a short-lived access token, so nothing secret is
 # stored in GitHub and there is no key to rotate or leak. See docs/deployment-gcp.md for the
 # one-time GCP setup this expects.
+# Least privilege at the top; the build job re-grants id-token for WIF. The release job runs on a
+# self-hosted runner and needs no GCP identity at all -- it authenticates to the cluster with its
+# pod ServiceAccount -- so it never gets one.
 permissions:
   contents: read
-  id-token: write
 
 # One deployment at a time, and never cancel one in flight. The deployment is single-writer with
 # an OnDelete strategy: two overlapping runs could delete the pod from under each other, and a
@@ -68,10 +70,18 @@ jobs:
       - name: Test
         run: pnpm test
 
-  deploy:
-    name: Build, push and deploy
+  # Build and push run on a GitHub-hosted runner, where Docker and Workload Identity Federation
+  # work and always did -- this half never failed. Only the cluster steps moved (see `release`).
+  build:
+    name: Build and push
     needs: gate
     runs-on: ubuntu-latest
+    # Only this job mints an OIDC token, and only to push to Artifact Registry.
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -126,18 +136,44 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: docker push "${IMAGE}:${VERSION}"
 
-      - name: Get cluster credentials
-        uses: google-github-actions/get-gke-credentials@64bc7249bbcf78056bb92f14d3cedc2da193946c # v2.3.5
+  # The cluster half, on a self-hosted runner INSIDE the VPC.
+  #
+  # WHY: the cluster has Master Authorized Networks enabled, allowlisting only the operator's own
+  # CIDRs. A GitHub-hosted runner draws from a huge, shifting IP pool and cannot be allowlisted
+  # meaningfully, so v0.1.0-alpha.6 failed here with "Kubernetes cluster unreachable: dial tcp
+  # 34.45.224.238:443: i/o timeout" after every earlier step passed. A pod in the cluster reaches
+  # the API server via kubernetes.default.svc and never consults that allowlist.
+  #
+  # The runner is deploy/ci-runner/ -- ephemeral, one job per pod, kubectl and helm only.
+  release:
+    name: Release to the cluster
+    needs: build
+    runs-on: [self-hosted, fieldos-gke]
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          cluster_name: ${{ env.CLUSTER }}
-          location: ${{ env.REGION }}
+          persist-credentials: false
+
+      # No `get-gke-credentials` and no gcloud auth here. The runner pod's ServiceAccount is
+      # already a cluster credential: kubectl and helm pick up the in-cluster config from
+      # KUBERNETES_SERVICE_HOST and the projected token automatically. Fetching external
+      # credentials would reintroduce the exact dependency -- an allowlisted source address --
+      # that this job exists to avoid.
+      - name: Confirm cluster reachability
+        run: |
+          set -euo pipefail
+          # Assert the premise before mutating anything. If the in-cluster path is broken, fail
+          # here where nothing has changed, rather than midway through a release.
+          kubectl version -o yaml | sed -n '/serverVersion/,/gitVersion/p'
+          kubectl get statefulset "${RELEASE}" -n "${NAMESPACE}" -o wide
 
       # --reuse-values so a deploy carries forward whatever the operator configured by hand
       # (admins, publicUrl, the site gate) instead of silently reverting it to chart defaults.
       # Only the image tag changes here.
       - name: Helm upgrade
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           helm upgrade "${RELEASE}" ./charts/fieldos \
@@ -188,8 +224,6 @@ jobs:
       # the deployed VERSION as well, which readiness cannot: a pod can be perfectly healthy while
       # running the image the previous release left behind.
       - name: Verify the deployment
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           want="${IMAGE}:${VERSION}"
