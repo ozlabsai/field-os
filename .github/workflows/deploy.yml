@@ -162,6 +162,22 @@ jobs:
       # KUBERNETES_SERVICE_HOST and the projected token automatically. Fetching external
       # credentials would reintroduce the exact dependency -- an allowlisted source address --
       # that this job exists to avoid.
+      # Assert the inputs BEFORE the first mutating step. An unknown step output expands to the
+      # empty string rather than failing, so a bad `needs` reference would otherwise surface as
+      # `helm upgrade --set image.tag=` succeeding and `Verify` failing two steps later -- after
+      # the pod has already been replaced. Check while nothing has changed yet.
+      - name: Check inputs
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${VERSION}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::VERSION is '${VERSION}' -- expected MAJOR.MINOR.PATCH[-prerelease]."
+            echo "::error::An empty value here means the \`needs.build.outputs\` reference is wrong."
+            exit 1
+          fi
+          # The image must already be in the registry: build pushed it, and pulling is what the
+          # kubelet will do. Failing here beats a pod that lands in ImagePullBackOff.
+          echo "releasing ${IMAGE}:${VERSION}"
+
       - name: Confirm cluster reachability
         run: |
           set -euo pipefail

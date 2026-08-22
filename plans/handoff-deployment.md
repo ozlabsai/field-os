@@ -170,9 +170,15 @@ express it.
 **An unknown step output in GitHub Actions expands to the empty string, not an error.** Splitting
 the deploy job left `env: VERSION: ${{ steps.version.outputs.version }}` in a job that no longer had
 that step. It does not fail: it silently becomes `""`, so `helm upgrade --set image.tag=` would set
-an empty tag and `Verify` would fail two steps *after* the pod had already been replaced. Caught by
-reading the split output rather than by any tooling. A job-level `env` from `needs.<job>.outputs` is
-the fix, but the step-level one has to be *removed* — a step-level `env` wins over job-level.
+an empty tag and `Verify` would fail two steps *after* the pod had already been replaced.
+
+**The ordering is the dangerous part**: the failure lands *after* the destructive action, so the
+signal arrives when the deployment is already mutated rather than while it is still safe. Same
+family as the other traps here — the tooling reported success about something other than the
+question asked. Caught by reading the split output, not by anything that would have warned.
+
+A job-level `env` from `needs.<job>.outputs` is the fix, but the step-level one must be *removed*:
+a step-level `env` wins over job-level, so leaving it shadows the correct value with the empty one.
 
 **Kubernetes injects a variable named after your Service.** A Service named `fieldos` produces
 `FIELDOS_PORT=tcp://10.30.11.195:80` in every pod in the namespace, which collided with the
