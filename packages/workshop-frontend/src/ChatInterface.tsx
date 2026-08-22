@@ -2972,8 +2972,12 @@ export const ChatInput = ({
     : consoleLogSeverity === "warn"
       ? "warning"
       : "log";
+  // "Choose a model", not "No agent". Beside a list of model names, "No agent" reads as "I have
+  // not set one up yet" rather than "I am declining inference" -- a real user read it that way,
+  // sent a message, and got silence (OZL-313). Same shape as the apiUrl trap in the handoff: the
+  // label was accurate and still not enough, because people read the list, not the label.
   const selectedModelLabel = selectedModel == null
-    ? "No agent"
+    ? "Choose a model"
     : models.find((model) => model.id === selectedModel)?.name ?? selectedModel;
 
   const hasReadyAttachment = pendingAttachments.some(
@@ -3378,7 +3382,7 @@ export const ChatInput = ({
                     onClick={() => onModelChange(null)}
                     className="!h-auto rounded-xl !px-2 !py-1.5 text-[12px] leading-4 font-normal tracking-[-0.15px] text-kumo-subtle transition-colors data-highlighted:bg-kumo-tint/70 data-highlighted:text-kumo-default"
                   >
-                    <span className="min-w-0 flex-1 truncate">No agent</span>
+                    <span className="min-w-0 flex-1 truncate">No agent (don't answer)</span>
                     {selectedModel == null && (
                       <Check size={12} weight="bold" className="ml-3 flex-shrink-0 text-kumo-inactive" />
                     )}
@@ -5373,6 +5377,19 @@ function ChatInterface({
 
     // Use provided modelId or fall back to selectedModel
     const model = modelId !== undefined ? modelId : selectedModel;
+
+    // Sending with no model is a silent dead end: the chat is created, the message is stored, and
+    // nothing is ever invoked -- so it reads as "stuck" rather than as a choice the user made
+    // (OZL-313, hit by a real user within minutes). The composer's control says "No agent" beside
+    // a list of model names, which people read as "not set up yet" rather than "decline
+    // inference". Say so instead of accepting the message into a void.
+    if (model === null) {
+      toasts.add({
+        title: "Pick a model first — the message won't be answered without one",
+        variant: "error",
+      });
+      return;
+    }
 
     try {
       if (selectedChatId === null) {
