@@ -225,6 +225,20 @@ untidiness — the copies drift *silently*, and the failure surfaces far from th
 it. Where derivation is genuinely impossible, such as a string in one package describing data
 committed in another, a test that reads the real source is the substitute.
 
+**The author is structurally the wrong reader.** Two sessions working the same bug produced nine
+wrong mechanisms in a day, and **neither caught their own worst one** — each was caught by the other
+person. That is not a story about carelessness; a wrong assumption is invisible to its author
+precisely because it is the thing being reasoned *from* rather than *about*. The remedy is a second
+reader, not more care from the first.
+
+What makes a second reader useful rather than merely present is the separation this file keeps
+returning to: **state the measurement apart from what you think it means.** Welded together, a
+reader who doubts the conclusion has to reject the evidence with it, so they usually reject neither.
+Stated apart, three exchanges in one day each kept one half and discarded the other — a correct
+caller identification survived a wrong mechanism, a sound bundle measurement survived a wrong
+conclusion drawn from it, and a good prompt rewrite survived the too-broad scope that prompted it.
+Every time, the surviving half was the one that had not been attached to the other.
+
 **An intervention that can be inert must report whether it fired.** A hook, probe, blocker or
 filter that silently does nothing yields a null result indistinguishable from a real refutation,
 and the silence reads as evidence. Four instances in one debugging session: a `console.error` hook
