@@ -41,15 +41,24 @@ they cannot be baked into a manifest; the script mints a fresh one with `gh` (ne
 restarts the Deployment, because updating the Secret alone leaves the running pod holding the old
 token.
 
-## Ephemeral by design
+## Long-lived, deliberately
 
-`config.sh --ephemeral`: the runner takes one job, unregisters, and exits; the Deployment restarts
-it clean. A long-lived runner would carry a stale checkout or a half-written kubeconfig into the
-next release — the kind of failure nobody reproduces.
+The runner registers once and stays registered. It was originally `--ephemeral` — one job, then
+unregister and exit — and that was wrong: **a registration token lives ~60 minutes and is consumed
+at startup**, so a runner that re-registers after every job is only usable for the hour following
+an `install.sh` run. After that the pod sits in `CrashLoopBackOff` with a 404 from
+`GetTenantCredential`, and a tagged release queues forever against a runner that will never come
+back. Found while cutting `alpha.9`.
 
-Consequence: **between releases there is normally no registered runner**, and that is expected. The
-pod restarts and re-registers on its own. If a queued deploy sits waiting, check the pod is running
-and the token has not expired.
+The two reasons originally given for ephemeral do not survive checking:
+
+- *"a stale checkout"* — `actions/checkout` defaults to `clean: true`, so the workspace is wiped
+  before every checkout anyway.
+- *"a half-written kubeconfig"* — the release job writes none; it authenticates with the pod's
+  ServiceAccount in place, which is the entire reason this runner exists.
+
+So the property was being paid for and not delivering anything. If a future job does leave state
+worth clearing, clear that state — do not buy a fresh pod with a credential that expires.
 
 ## The secret exposure, stated deliberately
 

@@ -128,9 +128,10 @@ spec:
         - name: runner
           image: IMAGE_PLACEHOLDER
           # No `args`: the image has Cmd=/bin/bash and no entrypoint of its own, so registration
-          # is done by our entrypoint.sh (which passes --ephemeral to config.sh). Ephemeral means
-          # the runner takes ONE job then exits, and the Deployment restarts it clean -- a
-          # long-lived runner would carry the previous release's leftovers into the next one.
+          # is done by our entrypoint.sh. The runner is deliberately NOT ephemeral -- a
+          # registration token lives ~60 minutes, so a runner that re-registers after every job is
+          # armed only for the hour after install.sh runs, and a later tag queues forever behind a
+          # CrashLoopBackOff. See entrypoint.sh for why the reasons for ephemeral do not hold.
           env:
             - name: RUNNER_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
