@@ -162,6 +162,37 @@ Rejected alternatives, with the reasons that still stand:
 The three manual commands in `docs/deployment-gcp.md` still work and remain the fallback if the
 runner is down.
 
+## OZL-134, and the six candidates it took to get there
+
+The first real user session produced one hard bug. Six candidate mechanisms: four simply wrong, one
+a genuine bug that was not the reported one, and the sixth correct. Recorded because the wrong turns
+are more instructive than the fix.
+
+| Candidate | Verdict |
+|---|---|
+| The agent never wrote a `client.js` | wrong — it existed, and the agent quoted a line from it |
+| `GadgetUI` has no empty state | wrong — "No gadget UI yet" ships in `alpha.7` |
+| `executeCode` returns no output | wrong — the handler returns `toolResult(output, …)`; the agent misread its own transcript |
+| The facet Proxy's `Reflect.get` drops `dup` | wrong — `Reflect.get(stub, "dup", stub)` returns a function |
+| The Proxy's promise wrapper breaks `dup()` | **right, and a real bug** (fixed in #139) — but not the reported one |
+| The loader boundary strips the callback | **right for the report**: an *object* callback is structurally cloned and arrives dead |
+
+**The answer: a bare function crosses the loader as a live RPC stub with a working `dup()`. An
+object with methods does not.** `agent.ts` was teaching the client to pass
+`class Callback extends RpcTarget` — the one shape that cannot cross. No kernel change was needed;
+it was a prompt defect, fixed in #145, with the end-to-end test in
+`packages/workerd-tests/__tests__/gadget-sandbox.test.js`.
+
+Two things generalise:
+
+**Reproducing a mechanism does not establish it is the reported one.** #139 reproduced a genuine
+fault and fixed it. The reported error text (`callback.dup is not a function`) never matched what
+that fault produces (`result.catch is not a function`), and that mismatch was the thread — ignored
+for hours because a working reproduction feels like an answer.
+
+**Every wrong candidate cited real, correctly-quoted code.** None was careless. That is what makes
+this class dangerous: the evidence is sound and the inference from it is not.
+
 ## Evidence for OZL-229, gathered the hard way
 
 Three concrete instances from the first real user session, worth having in one place because the
@@ -181,8 +212,8 @@ recovered the registry pointers (`publicCollections:…`, `observedCollection:�
 Nothing was lost; the *record* was.
 
 **A gadget that renders nothing logs nothing.** The pod sat at 6m CPU with a broken gadget, no error
-in the log, and the frontend's in-iframe error channel silent. The failing path (OZL-134) throws
-inside a Proxy wrapper whose whole purpose is to route exceptions to the gadget console, and the
+in the log, and the frontend's in-iframe error channel silent. The failing path (OZL-134) threw
+inside the gadget's own code after a wrongly-shaped callback arrived dead, and the
 throw happened *before* that wrapper could act. Correct behaviour from every component, and no
 signal anywhere.
 
