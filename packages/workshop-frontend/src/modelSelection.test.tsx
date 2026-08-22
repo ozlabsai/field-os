@@ -44,3 +44,34 @@ describe("getStoredSelectedModel", () => {
     expect(getStoredSelectedModel([])).toBeNull();
   });
 });
+
+// A sentinel written before OZL-313 was fixed came from onboarding running with no models
+// configured, not from a user declining inference -- and left them unanswered forever with no way
+// to know a fix had shipped. The two cases are told apart by a marker written alongside an
+// explicit pick; clearing indiscriminately would silently override a real "No agent" choice, which
+// is a different bug rather than a fix.
+describe("migrating a pre-fix sentinel", () => {
+  it("clears an unmarked sentinel so the fallback can resolve a model", () => {
+    localStorage.setItem("lastSelectedModel", NO_AGENT_OPTION_VALUE);   // no marker: pre-fix
+    expect(getStoredSelectedModel(models)).toBe("a");
+    // Cleared, not merely ignored -- so it cannot resurface on a later read.
+    expect(localStorage.getItem("lastSelectedModel")).toBeNull();
+  });
+
+  it("honours a marked sentinel, which is a deliberate choice", () => {
+    persistSelectedModel(null);
+    expect(getStoredSelectedModel(models)).toBeNull();
+    expect(getStoredSelectedModel(models)).toBeNull();   // and stays honoured on re-read
+  });
+
+  it("drops the marker once a model is chosen", () => {
+    persistSelectedModel(null);
+    persistSelectedModel("b");
+    expect(getStoredSelectedModel(models)).toBe("b");
+  });
+
+  it("still returns null after migration when there is nothing to fall back to", () => {
+    localStorage.setItem("lastSelectedModel", NO_AGENT_OPTION_VALUE);
+    expect(getStoredSelectedModel([])).toBeNull();
+  });
+});
