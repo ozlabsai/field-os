@@ -122,7 +122,9 @@ IMPORTANT: Frontend error reporting is a separate, opt-in path:
 
 This is a fork that runs on a different runtime than upstream tests against, so claims in the
 planning docs decay silently. Each rule below was earned by a specific failure rather than stated
-as principle — the full list is in `plans/handoff.md` § Traps.
+as principle. The incidents behind them are recorded in `plans/handoff.md` § Traps and
+`plans/handoff-deployment.md` § Traps, which hold more detail and more cases than are distilled
+here.
 
 **Plan claims are hypotheses until executed.** `plans/*.md` records reasoning, not guarantees. Two
 plausible, load-bearing claims were wrong: "R2 → MinIO, R2's API is S3-compatible" conflated R2's
