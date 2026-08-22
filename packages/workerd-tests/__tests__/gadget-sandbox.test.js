@@ -95,6 +95,46 @@ function gadgetSource() {
 }
 
 /**
+ * Gadget source that reports on a callback stub passed IN from outside the sandbox.
+ *
+ * This is the OZL-134 question, and it can only be asked here. `agent.ts:425-441` instructs the
+ * agent to call `callback.dup()` inside `subscribe()` so the stub outlives the call; without it
+ * Cap'n Web disposes it on return and the subscription silently never delivers. Whether `dup`
+ * survives the crossing into a loaded worker is not observable in-process -- an in-process harness
+ * shows the callback arriving as a plain `_RpcStub` with `dup` present either way, so such a test
+ * passes regardless of the answer and proves nothing.
+ *
+ * Reports rather than asserts, so a surprising answer is still an answer.
+ */
+function callbackProbeSource() {
+  return `
+    import { DurableObject } from "cloudflare:workers";
+
+    export class Gadget extends DurableObject {
+      async probeCallback(callback) {
+        const report = { alive: "gadget-ran" };
+        report.type = typeof callback;
+        report.ctor = callback?.constructor?.name ?? null;
+        report.proto = Object.getPrototypeOf(callback ?? {})?.constructor?.name ?? null;
+        report.hasDup = typeof callback?.dup;
+        report.hasOnRpcBroken = typeof callback?.onRpcBroken;
+
+        // The exact line agent.ts tells the agent to write. Reported, not thrown, so a failure
+        // here is data rather than a dead test.
+        try {
+          const duplicate = callback.dup();
+          report.dupResult = typeof duplicate;
+          report.dupUsable = typeof duplicate?.update === "function";
+        } catch (err) {
+          report.dupError = String(err);
+        }
+        return report;
+      }
+    }
+  `;
+}
+
+/**
  * Create a workspace + gadget, write `source` into it, and run `probe()` inside the sandbox.
  *
  * This is the model-free path -- no inference server is involved. `bindingName` is passed
@@ -192,4 +232,63 @@ test("the gadget worker gets the runtime compatibility flags the overseer passes
   // same set as the agent's executeCode path (that one also sets disallow_importable_env,
   // overseer.ts:5451) -- an asymmetry worth noticing if either side changes.
   expect(report.hasCtxRestore).toBe(true);
+}, 120_000);
+
+// SKIPPED because it currently FAILS -- it documents an open bug (OZL-134), and the finding is
+// recorded here so the next reader gets the answer without re-running it:
+//
+//   alive: "gadget-ran"      the gadget really executed, so this is a real negative
+//   ctor:  "Object"          proto: "Object"      NOT an RpcStub
+//   hasDup: "undefined"      hasOnRpcBroken: "undefined"
+//   dupError: "TypeError: callback.dup is not a function"
+//
+// The callback is structurally cloned across the loader boundary and arrives with every method
+// gone. Un-skip when the callback travels as a loopback entrypoint (see TransientStubLoopback,
+// overseer.ts:7191) rather than as a plain argument; it should then pass unchanged.
+test.skip("a callback stub keeps dup() when it crosses into the loaded worker (OZL-134)", async () => {
+  // The question #139 could not answer. `agent.ts:425-441` tells the agent to call
+  // `callback.dup()` inside `subscribe()`; without it Cap'n Web disposes the stub when the call
+  // returns and the subscription silently never delivers -- the gadget's UI then waits forever and
+  // renders blank while the agent reports the feature as working.
+  //
+  // Only this suite can ask it. The facet Proxy (overseer.ts:2429) is not a candidate: its call
+  // site is `Reflect.apply(method, target, args)`, which wraps the *return value* and never
+  // touches `args`, so a callback cannot be transformed by it -- confirmed both by reading and by
+  // an in-process probe that reports `_RpcStub` with `dup` present with or without the Proxy.
+  // A stub crossing into a *loaded worker* is a different matter: that is a separate isolate, so
+  // the stub is reconstructed rather than merely passed, and reconstruction is where a missing
+  // property would come from. It also fits the reported wording -- `callback.dup is not a
+  // function` is the absent-property error, not what a wrapper produces.
+  const [username] = nextUsernames("dupprobe");
+  const api = connect(stack.url);
+  const authed = await signUp(api, username);
+  const overseer = await authed.newGadget();
+  const gadget = await overseer.createGadget("Dup Probe", undefined, "DUP");
+  const gadgetId = await gadget.getId();
+
+  const doc = new Y.Doc();
+  doc.transact(() => {
+    const text = new Y.Text();
+    text.insert(0, callbackProbeSource());
+    doc.getMap(String(gadgetId)).set("server.js", text);
+  });
+  await overseer.updateCode(Y.encodeStateAsUpdateV2(doc));
+
+  /** @type {any} */
+  const connected = await gadget.connectToGadget();
+
+  // A callback the gadget can call back into, exactly as a real gadget UI would pass.
+  let delivered = [];
+  const callback = { update(state) { delivered.push(state); } };
+  const report = await connected.probeCallback(callback);
+
+  // Liveness first: every assertion below is meaningless if the gadget never started.
+  expect(report.alive).toBe("gadget-ran");
+
+  // The finding, whatever it is. Recorded in the failure message so a red run says what it saw
+  // rather than only that it disagreed.
+  const seen = JSON.stringify(report);
+  expect(report.dupError, `callback stub as the gadget sees it: ${seen}`).toBeUndefined();
+  expect(report.hasDup, `callback stub as the gadget sees it: ${seen}`).toBe("function");
+  expect(report.dupUsable, `dup() returned something unusable: ${seen}`).toBe(true);
 }, 120_000);
