@@ -121,8 +121,8 @@ IMPORTANT: Frontend error reporting is a separate, opt-in path:
 ## Verification posture
 
 This is a fork that runs on a different runtime than upstream tests against, so claims in the
-planning docs decay silently. Four rules, each earned by a specific failure rather than stated as
-principle — the full list is in `plans/handoff.md` § Traps.
+planning docs decay silently. Each rule below was earned by a specific failure rather than stated
+as principle — the full list is in `plans/handoff.md` § Traps.
 
 **Plan claims are hypotheses until executed.** `plans/*.md` records reasoning, not guarantees. Two
 plausible, load-bearing claims were wrong: "R2 → MinIO, R2's API is S3-compatible" conflated R2's
@@ -144,3 +144,22 @@ R2 protocol would be far harder than KV, which execution refuted.
 false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
 declarations *inside a prompt template literal*. Resolve imports rather than matching names, and
 sanity-check a pattern before trusting a negative result.
+
+**Derive, never restate.** When the same fact must exist in two places, compute the second from the
+first. Two people reached for this independently in one week without any guidance saying to:
+`data-tour` selectors are computed from each row's resolved route (`SidebarItem.tsx`) rather than
+threaded through every call site, and `AiModelProvider` is derived from `AI_MODEL_PROVIDERS`
+(`api.ts`) so the runtime list and the type cannot disagree. The cost of restating is not
+untidiness — the copies drift *silently*, and the failure surfaces far from the edit that caused
+it. Where derivation is genuinely impossible, such as a string in one package describing data
+committed in another, a test that reads the real source is the substitute.
+
+**An intervention that can be inert must report whether it fired.** A hook, probe, blocker or
+filter that silently does nothing yields a null result indistinguishable from a real refutation,
+and the silence reads as evidence. Four instances in one debugging session: a `console.error` hook
+that caught nothing because React holds its own reference; an event blocker that blocked nothing; an
+`appendChild` hook that dynamic `import()` bypasses; and a router probe that would have been
+half-armed had its methods not been checked first. Each was caught only by a count nobody asked for
+— `probe armed: 2/2`, `0 events blocked`. The rule extends one level up, which is where it bit
+hardest: the check that the intervention is *present* can be inert too. `grep -c … | head -1` over
+a two-file glob reported `0` for a probe that was sitting in the second file.
