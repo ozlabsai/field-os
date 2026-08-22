@@ -12,8 +12,10 @@ learned, what is unverified, and what to do next.
 
 ## Where things stand
 
-**FieldOS is live at https://os.ozlabs.ai**, on GKE, with TLS, behind a shared-secret gate, and
-deployable by git tag. Every row below was verified by execution, not inference:
+**FieldOS is live at https://os.ozlabs.ai**, on GKE, with TLS, behind a shared-secret gate. A git
+tag builds, tests and pushes a verified image; the *deploy* half of that pipeline is blocked on
+cluster reachability (see below), so applying a release is still three manual commands. Every row
+below was verified by execution, not inference:
 
 | | |
 |---|---|
@@ -80,7 +82,11 @@ and the `keys.json` guard.
 
 ## What to pick up next
 
-**Nothing is blocked.** In rough order of value:
+**One thing is blocked, and it is the only thing:** the tag-to-deploy pipeline cannot reach the
+cluster. See "The pipeline's one failure" below. Everything else is in rough order of value:
+
+0. **Give the deploy job a runner inside the VPC.** Decided 2026-08-22; not built. The workflow is
+   correct and every other step passes — this is an infrastructure gap, not a code one.
 
 1. **Use the product.** The largest gap by far. Signup and the RPC transport are browser-verified;
    *building a gadget*, the walkthrough, and a real workspace are not. This is the difference
@@ -97,6 +103,42 @@ and the `keys.json` guard.
    procedure in `docs/deployment-gcp.md` has not been executed against real user data.
 5. **Image size**, if cold-node pull time becomes a complaint. See point 5 above for why
    `pnpm --prod` is the wrong lever.
+
+## The pipeline's one failure, and the decided fix
+
+`v0.1.0-alpha.6` ran the full workflow on 2026-08-22. **Gate, WIF authentication, image build and
+image push all succeeded** — `alpha.6` is in Artifact Registry, pushed by CI. It failed at
+`Helm upgrade`:
+
+```
+Error: UPGRADE FAILED: Kubernetes cluster unreachable:
+  Get "https://34.45.224.238/version": dial tcp 34.45.224.238:443: i/o timeout
+```
+
+**Cause: the cluster has Master Authorized Networks enabled**, allowlisting three CIDRs
+(`147.235.195.247/32`, `2.54.0.0/16`, `79.177.0.0/16` — the operator's own addresses). A
+GitHub-hosted runner draws from a huge, shifting IP pool and can never be allowlisted meaningfully.
+
+That control is doing its job, and the workflow is not wrong. No amount of review would have found
+this: it is a property of the cluster, not of the YAML, and only running it surfaced it.
+
+**The failure was clean.** `Replace the pod`, `Wait for the new pod` and `Verify the deployment` all
+**skipped** rather than running, so the live deployment was never touched — same pod UID, same
+image, uninterrupted. The step ordering (upgrade before any pod mutation) is what made a failed
+deploy a no-op instead of a half-applied one.
+
+**Decided fix: a self-hosted runner inside the VPC**, which reaches the API server privately and
+leaves the allowlist closed. Not built. Rejected alternatives, with reasons:
+
+- *Allowlist GitHub's published ranges* — a large, shared, frequently-changing set; it would
+  effectively open the control plane to anyone running a GitHub Action.
+- *Cloud Build / Cloud Run job* — viable, keeps `git tag` as the trigger, but moves the deploy out
+  of the workflow and needs its own network configuration.
+- *Drop the cluster steps and deploy by hand* — the fallback if the runner is not worth it. CI would
+  still produce a gated, verified image; only the last three steps are manual.
+
+**Until it is fixed, a tag builds and pushes a verified image and stops there.** Deploy with the
+three commands in `docs/deployment-gcp.md` (helm upgrade, delete pod, wait).
 
 ## Traps that have already cost time
 
