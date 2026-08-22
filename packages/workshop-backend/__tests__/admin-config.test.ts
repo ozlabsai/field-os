@@ -51,6 +51,30 @@ describe("parseAdminConfig", () => {
   });
 });
 
+describe("disabledModelProviders", () => {
+  it("defaults to offering every provider", () => {
+    // The default has to be "all on", matching connectors and resources: a deployment that never
+    // visits this setting must not silently lose its model picker.
+    expect(parseAdminConfig("{}").disabledModelProviders).toEqual([]);
+    expect(DEFAULT_ADMIN_CONFIG.disabledModelProviders).toEqual([]);
+  });
+
+  it("keeps known providers and drops anything else", () => {
+    // An unknown id would sit in stored config disabling nothing, and surface in the admin panel
+    // as a toggle for a provider that does not exist.
+    let config = parseAdminConfig(JSON.stringify({
+      disabledModelProviders: ["anthropic", "OPENAI", "not-a-provider", 42, null],
+    }));
+    expect(config.disabledModelProviders.toSorted()).toEqual(["anthropic", "openai"]);
+  });
+
+  it("survives a round trip through serialize/parse", () => {
+    let config = { ...DEFAULT_ADMIN_CONFIG, disabledModelProviders: ["cloudflare"] };
+    expect(parseAdminConfig(serializeAdminConfig(config)).disabledModelProviders)
+        .toEqual(["cloudflare"]);
+  });
+});
+
 describe("reorderFormats", () => {
   let promoted = [
     { blueprintId: "a", enabled: true },
