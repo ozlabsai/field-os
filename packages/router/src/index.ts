@@ -18,11 +18,17 @@ export interface Env {
   // no gate, which is the right default for an airgapped install where the network is the boundary.
   //
   // On a Kubernetes deployment, treat this as known to anyone with repo write access. Helm needs
-  // `list` on secrets, and a Kubernetes list returns full object bodies including `data` -- so a
-  // deploy runner reads every secret in the namespace whether or not it was granted `get`.
-  // Measured on the live cluster, not inferred: `kubectl auth can-i get secret/...` answered "no"
-  // while a collection list returned the value in a 200 body. RBAC cannot express the difference;
-  // an external secret store (Secret Manager via CSI) is the only fix if it ever matters.
+  // `list` on secrets when using its default Secret storage driver, and a Kubernetes list returns
+  // full object bodies including `data` -- so such a deploy runner reads every secret in the
+  // namespace whether or not it was granted `get`.
+  //
+  // Measured on the live cluster: `kubectl auth can-i get secret/...` answered "no" while a
+  // collection list returned the value in a 200 body. Inferred, matching documented list
+  // semantics: that this is inherent rather than a quirk of one cluster.
+  //
+  // RBAC cannot express the difference. Fixes, if it ever matters: move helm's release storage out
+  // of this namespace (HELM_DRIVER supports ConfigMaps or SQL), or hold the value in an external
+  // store (Secret Manager via CSI).
   //
   // It does not matter today, because this is a deployment gate rather than an authentication
   // system (see below) -- but do not build anything on the assumption that the value is held
