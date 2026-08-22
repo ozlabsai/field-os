@@ -121,9 +121,15 @@ To restore: stop the pod, replace the state, start it.
 
 ```sh
 kubectl scale statefulset fieldos --replicas=0     # stop the writer FIRST
+# Safety copy BEFORE wiping: if the backup turns out to be bad, this is the only way back.
+kubectl exec ... -- sh -c 'cp -R /var/lib/fieldos/do-disk /var/lib/fieldos/safety-<date>'
 kubectl exec ... -- sh -c 'cp -r /var/lib/fieldos/backup-<date>/*-* /var/lib/fieldos/do-disk/'
 kubectl scale statefulset fieldos --replicas=1
 ```
+
+The safety copy is one extra command and it is what makes this reversible. Restoring *over* live
+data is destructive the moment the backup is wrong, and a backup is exactly the thing you have not
+verified yet at that point. Delete the copy once a workspace opens and looks right.
 
 Note the `*-*` and the **absence of a trailing slash** — both are load-bearing, and both were
 measured rather than reasoned:
@@ -141,6 +147,11 @@ WAL pair restores, opens, and passes structural checks while quietly missing its
 transactions — `quick_check` will say `ok`. `packages/integration-tests/restore-rehearsal.mjs`
 automates the full drill (write → back up → `kill -9` mid-write → wipe → restore → read back) and
 has been executed against a container: it passes, with a negative control confirming it can fail.
+
+**The procedure above has also been executed against the live volume with real user data**
+(2026-08-23), verified by a SHA256 over a real gadget's stored content rather than by structural
+checks — identical before and after a full wipe. See `plans/handoff-deployment.md` § "The restore
+drill, executed".
 
 ## Checking it actually works
 
