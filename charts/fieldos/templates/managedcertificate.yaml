@@ -1,0 +1,22 @@
+{{- if .Values.ingress.managedCertificate.enabled }}
+{{- /*
+  GKE-managed TLS: Google provisions and renews the certificate, so no Secret and no cert-manager.
+  Bound to the Ingress by the `networking.gke.io/managed-certificates` annotation rather than by
+  the Ingress `tls:` block, which is why ingress.tls.enabled stays off when this is on.
+
+  Provisioning REQUIRES the hostname to already resolve to the load balancer's IP: Google validates
+  by reaching the name over HTTP. So the order is create Ingress -> read its IP -> point DNS at it
+  -> wait. A certificate created before DNS exists sits in `FailedNotVisible` (not an error state
+  to fix, just one to wait out) and moves to Active on its own once the name resolves. Expect
+  15-30 minutes after DNS propagates, and note it cannot succeed at all while the record is
+  proxied by a CDN that terminates TLS itself -- the validation must reach Google's load balancer.
+*/}}
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ include "fieldos.fullname" . }}
+  labels: {{- include "fieldos.labels" . | nindent 4 }}
+spec:
+  domains:
+    - {{ required "ingress.host is required when managedCertificate is enabled" .Values.ingress.host | quote }}
+{{- end }}

@@ -1,0 +1,206 @@
+name: Deploy
+
+# Tag a release, get a deployment. `git tag v0.1.0-alpha.4 && git push --tags`.
+#
+# The gate runs FIRST and the deploy depends on it, so a tag on a broken commit fails before it can
+# reach the cluster. That ordering is the point of this workflow -- pushing an image is cheap to
+# undo, replacing the pod on a single-writer stateful deployment is not.
+on:
+  push:
+    tags:
+      - "v*"
+
+# No long-lived credentials. `id-token: write` lets the runner mint an OIDC token that GCP's
+# Workload Identity Federation exchanges for a short-lived access token, so nothing secret is
+# stored in GitHub and there is no key to rotate or leak. See docs/deployment-gcp.md for the
+# one-time GCP setup this expects.
+permissions:
+  contents: read
+  id-token: write
+
+# One deployment at a time, and never cancel one in flight. The deployment is single-writer with
+# an OnDelete strategy: two overlapping runs could delete the pod from under each other, and a
+# cancelled run could leave the release upgraded but the pod never replaced -- config is generated
+# at pod start, so that state is "the new config silently is not running".
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22.14.0"
+  PROJECT_ID: ozla-476923
+  REGION: us-central1
+  CLUSTER: field-gke
+  NAMESPACE: fieldos
+  RELEASE: fieldos
+  IMAGE: us-central1-docker.pkg.dev/ozla-476923/field/fieldos
+
+jobs:
+  # The same checks CI runs on a PR, re-run on the tagged commit itself. A tag can point at a
+  # commit that never went through a PR, and `pnpm gate` is not what CI runs -- build and the
+  # frontend airgap check (which runs inside the frontend build) both catch things lint+test pass.
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint and type-check
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
+
+  deploy:
+    name: Build, push and deploy
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # Strip the leading `v`: git tags are `v0.1.0-alpha.4`, image tags are `0.1.0-alpha.4`.
+      - name: Derive version
+        id: version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Validated, not merely trimmed. This value is interpolated into later `run:` blocks and
+          # into an image tag, and a tag name is attacker-controlled input the moment anyone with
+          # write access is compromised. Allowing only what a semver-ish release tag can contain
+          # means no shell metacharacter can survive to a command line. "They would need write
+          # access already" is a weak reason to skip a one-line check.
+          if ! printf '%s' "${version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::tag ${GITHUB_REF_NAME} is not a release version (expected vMAJOR.MINOR.PATCH[-prerelease])"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Deploying ${version} from ${GITHUB_REF_NAME}"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2.1.8
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@6a7c903a70c8625ed6700fa299f5ddb4ca6022e9 # v2.1.5
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      # linux/amd64 explicitly: a runner is already amd64, but stating it keeps the image identical
+      # to one built on an arm64 developer machine, where the default would be wrong for the nodes.
+      #
+      # VITE_BACKEND_HOST is deliberately NOT set. Unset, the frontend derives its API origin from
+      # window.location, so one image serves every hostname. Setting it bakes a host into the
+      # bundle and is the most-repeated deployment mistake in this project's history.
+      - name: Build image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 -t "${IMAGE}:${VERSION}" .
+
+      - name: Push image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: docker push "${IMAGE}:${VERSION}"
+
+      - name: Get cluster credentials
+        uses: google-github-actions/get-gke-credentials@64bc7249bbcf78056bb92f14d3cedc2da193946c # v2.3.5
+        with:
+          cluster_name: ${{ env.CLUSTER }}
+          location: ${{ env.REGION }}
+
+      # --reuse-values so a deploy carries forward whatever the operator configured by hand
+      # (admins, publicUrl, the site gate) instead of silently reverting it to chart defaults.
+      # Only the image tag changes here.
+      - name: Helm upgrade
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          helm upgrade "${RELEASE}" ./charts/fieldos \
+            --namespace "${NAMESPACE}" \
+            --reuse-values \
+            --set image.tag="${VERSION}"
+
+      # The StatefulSet is OnDelete, so `helm upgrade` alone changes the template and restarts
+      # NOTHING -- config.capnp is generated at pod start, so an un-replaced pod is running the old
+      # image AND the old config. Deleting the pod is what applies the release. Recording the old
+      # UID first is how the wait below can tell "the new pod is ready" from "the old pod was
+      # always ready", which are indistinguishable by readiness alone.
+      - name: Replace the pod
+        id: replace
+        run: |
+          set -euo pipefail
+          old_uid=$(kubectl get pod "${RELEASE}-0" -n "${NAMESPACE}" -o jsonpath='{.metadata.uid}' 2>/dev/null || echo "none")
+          echo "old_uid=${old_uid}" >> "$GITHUB_OUTPUT"
+          kubectl delete pod "${RELEASE}-0" -n "${NAMESPACE}" --wait=false
+
+      - name: Wait for the new pod
+        env:
+          OLD_UID: ${{ steps.replace.outputs.old_uid }}
+        run: |
+          set -euo pipefail
+          # A cold node pulls ~2.4GB before the container starts, so this is minutes, not seconds.
+          for _ in $(seq 1 60); do
+            uid=$(kubectl get pod "${RELEASE}-0" -n "${NAMESPACE}" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
+            ready=$(kubectl get pod "${RELEASE}-0" -n "${NAMESPACE}" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || true)
+            reason=$(kubectl get pod "${RELEASE}-0" -n "${NAMESPACE}" -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)
+            case "${reason}" in
+              CrashLoopBackOff|ImagePullBackOff|ErrImagePull|RunContainerError)
+                echo "::error::pod entered ${reason}"
+                kubectl logs "${RELEASE}-0" -n "${NAMESPACE}" --tail=50 || true
+                exit 1 ;;
+            esac
+            if [ -n "${uid}" ] && [ "${uid}" != "${OLD_UID}" ] && [ "${ready}" = "true" ]; then
+              echo "new pod ${uid} is ready"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::pod did not become ready within 15 minutes"
+          kubectl describe pod "${RELEASE}-0" -n "${NAMESPACE}" || true
+          exit 1
+
+      # Readiness already implies /healthz answered, since that IS the readiness probe. This checks
+      # the deployed VERSION as well, which readiness cannot: a pod can be perfectly healthy while
+      # running the image the previous release left behind.
+      - name: Verify the deployment
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          want="${IMAGE}:${VERSION}"
+          got=$(kubectl get pod "${RELEASE}-0" -n "${NAMESPACE}" -o jsonpath='{.spec.containers[0].image}')
+          if [ "${got}" != "${want}" ]; then
+            echo "::error::pod is running ${got}, expected ${want}"
+            exit 1
+          fi
+          # Through the Service, so this exercises the same path a user's request takes rather than
+          # talking to the container directly.
+          kubectl run "verify-${GITHUB_RUN_ID}" -n "${NAMESPACE}" --rm -i --restart=Never \
+            --image=curlimages/curl:8.11.1 --quiet -- \
+            curl -fsS --max-time 20 "http://${RELEASE}.${NAMESPACE}.svc.cluster.local/healthz"
+          echo "deployed ${want}"

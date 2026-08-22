@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fieldos.fullname" . }}
+  labels: {{- include "fieldos.labels" . | nindent 4 }}
+  {{- if .Values.ingress.backendConfig.enabled }}
+  annotations:
+    # Binds the BackendConfig to this Service. Without the annotation the CRD exists and is simply
+    # never consulted -- the load balancer keeps its 30s default and nothing reports a problem.
+    cloud.google.com/backend-config: '{"default":"{{ include "fieldos.fullname" . }}"}'
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector: {{- include "fieldos.selectorLabels" . | nindent 4 }}
+---
+# The StatefulSet's governing service. Headless (clusterIP: None) as StatefulSets require.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fieldos.fullname" . }}-headless
+  labels: {{- include "fieldos.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      name: http
+  selector: {{- include "fieldos.selectorLabels" . | nindent 4 }}

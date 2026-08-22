@@ -1,0 +1,9 @@
+apiVersion: v2
+name: fieldos
+description: FieldOS — a sandboxed platform for vibe-coded personal applications and AI agents
+type: application
+# Chart version, bumped per chart change. appVersion tracks the FieldOS release the default image
+# points at; the two move independently.
+version: 0.1.0
+appVersion: "0.1.0-alpha.1"
+kubeVersion: ">=1.29.0-0"

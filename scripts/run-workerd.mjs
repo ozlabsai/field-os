@@ -4,10 +4,22 @@
 // `wrangler deploy --dry-run`, emits a workerd `config.capnp` wiring the bundles together, and
 // (unless --build-only) spawns `workerd serve` on it.
 //
-// Usage: node scripts/run-workerd.mjs [--out .workerd] [--port 8080] [--allow public,private]
-//                                      [--build-only] [--no-watchdog] [--only <pkg,...>]
-//                                      [--interceptor]
+// Usage: node scripts/run-workerd.mjs [--out .workerd] [--state <dir>] [--port 8080]
+//                                      [--allow public,private]
+//                                      [--build-only] [--bundle-only] [--use-bundles]
+//                                      [--no-watchdog]
+//                                      [--only <pkg,...>] [--interceptor]
 //                                      [--watchdog-interval 5000] [--watchdog-failures 3]
+//
+// --bundle-only stops after bundling; --build-only also writes config.capnp. The distinction
+// matters when baking a container image: config.capnp embeds instance state (ADMINS, CA bundle,
+// session ceilings) and absolute paths, so it must be generated at boot, not baked into a layer.
+//
+// --state puts durable state (do-disk/, keys.json) somewhere other than --out, so a container can
+// mount a volume for those while bundles/ stay in the image. Defaults to --out.
+//
+// --use-bundles reads bundles a previous --bundle-only wrote rather than rebuilding them, so a
+// container can generate config at boot without carrying the build toolchain.
 //
 // Environment: FIELDOS_CA_BUNDLE=/path/ca.pem[,/path/other.pem] trusts an operator's private CA
 // for internal HTTPS services (OZL-300); FIELDOS_CA_TRUST_SYSTEM=false additionally drops the
@@ -161,7 +173,8 @@ function loadCaBundle(paths, trustSystemRaw) {
 
 function parseArgs(argv) {
   const args = {
-    out: join(ROOT, ".workerd"), port: 8080, allow: ["public", "private"], buildOnly: false,
+    out: join(ROOT, ".workerd"), state: undefined, port: 8080, allow: ["public", "private"],
+    buildOnly: false, bundleOnly: false, useBundles: false,
     watchdog: true, watchdogInterval: 5000, watchdogFailures: 3, only: undefined,
     interceptor: false,
   };
@@ -177,6 +190,7 @@ function parseArgs(argv) {
     const nextValue = () => (inlineValue !== undefined ? inlineValue : argv[++i]);
 
     if (a === "--out") args.out = resolve(nextValue());
+    else if (a === "--state") args.state = resolve(nextValue());
     else if (a === "--port") args.port = Number.parseInt(nextValue(), 10);
     else if (a === "--allow") {
       const raw = nextValue();
@@ -185,6 +199,8 @@ function parseArgs(argv) {
       args.only = nextValue().split(",").map((s) => s.trim()).filter(Boolean);
     } else if (a === "--interceptor") args.interceptor = true;
     else if (a === "--build-only") args.buildOnly = true;
+    else if (a === "--bundle-only") args.bundleOnly = true;
+    else if (a === "--use-bundles") args.useBundles = true;
     else if (a === "--no-watchdog") args.watchdog = false;
     else if (a === "--watchdog-interval") args.watchdogInterval = Number.parseInt(nextValue(), 10);
     else if (a === "--watchdog-failures") args.watchdogFailures = Number.parseInt(nextValue(), 10);
@@ -256,7 +272,36 @@ for (const { role, target, code } of internalHosts.failures) {
 
 // The origin the browser reaches this deployment on. Baked into the config rather than discovered,
 // because the workers need it to build absolute callback URLs.
-const publicBaseUrl = `http://localhost:${args.port}`;
+//
+// FIELDOS_PUBLIC_URL overrides the localhost default for a deployment served on a real hostname.
+// Without it a container hands every gatekeeper `http://localhost:<port>/gatekeeper/<name>` as its
+// OAuth callback base, so a connect flow redirects the user's browser to their own machine. That
+// fails at the END of a connect flow rather than at boot -- it looks like the gatekeeper is broken
+// rather than like a misconfigured origin, which is the same shape as the VITE_BACKEND_HOST trap.
+const publicBaseUrl = (() => {
+  const override = process.env.FIELDOS_PUBLIC_URL?.trim();
+  if (!override) return `http://localhost:${args.port}`;
+  let parsed;
+  try {
+    parsed = new URL(override);
+  } catch {
+    throw new Error(
+        `FIELDOS_PUBLIC_URL: ${JSON.stringify(override)} is not a valid URL.\n` +
+        `  Give the origin the browser reaches this deployment on, e.g. https://fieldos.example.com`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`FIELDOS_PUBLIC_URL: expected an http(s) URL, got ${parsed.protocol}//`);
+  }
+  // Trailing slashes are stripped by each gatekeeper anyway, but a path component is a mistake
+  // worth naming: callback URLs are built by appending, so `https://host/app` would silently
+  // produce `https://host/app/gatekeeper/...` and mismatch whatever is registered at the provider.
+  if (parsed.pathname !== "/") {
+    throw new Error(
+        `FIELDOS_PUBLIC_URL: expected an origin with no path, got ${JSON.stringify(parsed.pathname)}.\n` +
+        `  Callback URLs are built by appending to it, so a path silently mismatches the provider.`);
+  }
+  return parsed.origin;
+})();
 
 // ---------------------------------------------------------------------------
 // 1. Discover + bundle each worker with `wrangler deploy --dry-run --outdir`.
@@ -271,9 +316,28 @@ mkdirSync(bundlesDir, { recursive: true });
 
 const workers = []; // { pkgName, config, mainModule, modules, outDir }
 for (const pkg of included) {
-  console.log(`\nbundling ${pkg.name}...`);
-
   const outDir = join(bundlesDir, pkg.name);
+
+  // --use-bundles: read bundles a previous --bundle-only produced instead of rebuilding them.
+  //
+  // This is what makes a container image possible. Bundling needs the whole pnpm workspace and
+  // wrangler; generating config needs only the bundle output plus each wrangler.jsonc. Without
+  // this the runtime image would have to carry the full build toolchain and re-bundle nine
+  // workers on every container start -- and every restart would recompile the deployment.
+  if (args.useBundles) {
+    if (!existsSync(outDir)) {
+      throw new Error(
+          `--use-bundles: no bundle for ${pkg.name} at ${outDir}.\n` +
+          "  Run --bundle-only first, or drop --use-bundles to bundle now.");
+    }
+    console.log(`using existing bundle for ${pkg.name}`);
+    workers.push({
+      pkgName: pkg.name, config: readWranglerConfig(pkg.dir), ...collectModules(outDir), outDir,
+    });
+    continue;
+  }
+
+  console.log(`\nbundling ${pkg.name}...`);
   // Custom build commands (capnweb-validate) resolve their bin via `pnpm exec`, which requires
   // cwd to be inside the package so pnpm finds its node_modules/.bin.
   //
@@ -305,12 +369,36 @@ for (const pkg of included) {
   workers.push({ pkgName: pkg.name, config, mainModule, modules, outDir });
 }
 
+if (args.bundleOnly) {
+  console.log("--bundle-only: bundles written, not generating config.");
+  process.exit(0);
+}
+
 // ---------------------------------------------------------------------------
 // 2. uniqueKey persistence: generated once, reused across runs (it names the on-disk DO dir).
 // ---------------------------------------------------------------------------
 
-const keysPath = join(args.out, "keys.json");
+// Durable state lives here: the DO databases and the uniqueKeys that name their directories.
+// Defaults to --out so an ordinary local run is unchanged, but a container passes --state to put
+// these two on a mounted volume while `bundles/` and `config.capnp` stay in the image, which
+// --out alone cannot express: it conflates build output, ephemeral config and permanent state.
+const stateDir = args.state ?? args.out;
+mkdirSync(stateDir, { recursive: true });
+
+const keysPath = join(stateDir, "keys.json");
 const keys = existsSync(keysPath) ? JSON.parse(readFileSync(keysPath, "utf8")) : {};
+
+// A missing keys.json beside EXISTING DO directories is the one failure that is invisible:
+// uniqueKeyFor() would mint fresh UUIDs, workerd would create new empty directories, and the
+// deployment would boot healthy while every existing user's data sat unreachable on the same
+// volume. There is no migration mechanism, so refuse rather than silently start a second life.
+const doDiskPath = join(stateDir, "do-disk");
+if (!existsSync(keysPath) && existsSync(doDiskPath) && readdirSync(doDiskPath).length > 0) {
+  throw new Error(
+      `${doDiskPath} holds Durable Object state but ${keysPath} is missing. Generating new ` +
+      "uniqueKeys would orphan every existing workspace behind a healthy-looking boot. Restore " +
+      "keys.json from backup, or point --state at an empty directory to start fresh.");
+}
 
 function uniqueKeyFor(id) {
   if (!keys[id]) keys[id] = crypto.randomUUID();
@@ -469,6 +557,14 @@ for (const w of workers) {
   // port but 8787 — it fails at the *end* of a connect flow rather than at boot, so it looks like
   // the gatekeeper is broken. Mirrors the release manifest's contract (manifest-lib.mjs:187,208):
   // PUBLIC_BASE_URL on the backend, per-gatekeeper BASE_URL under the shared origin.
+  // The deployment-wide shared-secret gate, on the router because it is the only worker every
+  // request passes through. Forwarded rather than listed in INSTANCE_VARS: those go to the
+  // backend, and this one belongs to a worker that receives none of them.
+  if (pkgName === "router" && process.env.SITE_PASSWORD) {
+    bindingLines.push(
+        `      (name = "SITE_PASSWORD", text = ${capnpString(process.env.SITE_PASSWORD)}),`);
+  }
+
   if (pkgName === "workshop-backend") {
     bindingLines.push(`      (name = "PUBLIC_BASE_URL", text = ${capnpString(publicBaseUrl)}),`);
     // Instance state the deploy service injects at PUT time on a real deployment, and which no
@@ -663,7 +759,6 @@ function warnIfFrontendBuiltForOtherHost() {
 
 // The DO storage directory. workerd fails at startup with `Directory named "do-disk" not found`
 // if this isn't created before boot.
-const doDiskPath = join(args.out, "do-disk");
 mkdirSync(doDiskPath, { recursive: true });
 serviceEntries.push(`    (name = "do-disk", disk = (path = ${capnpString(doDiskPath)}, writable = true)),`);
 
@@ -766,6 +861,13 @@ console.log(`\nwrote ${configPath}`);
 // TLS trust, printed for the same reason as reach below: a handshake refused for want of a CA
 // reports an untrusted peer, never an empty bundle, so this is the only place an operator can see
 // that the CA they supplied was actually loaded.
+// Printed for the same reason as the reach and TLS lines below: a wrong public origin is invisible
+// until a user reaches the end of an OAuth flow, and then presents as a broken gatekeeper.
+console.log(`\npublic origin: ${publicBaseUrl}` +
+    (process.env.FIELDOS_PUBLIC_URL?.trim()
+      ? ""
+      : "  (default -- set FIELDOS_PUBLIC_URL for a deployment on a real hostname)"));
+
 console.log(`\nTLS trust: system CA bundle ${caBundle.trustSystem ? "trusted" : "NOT trusted"}` +
     (caBundle.pems.length
       ? `, plus ${caBundle.pems.length} operator CA file(s) (FIELDOS_CA_BUNDLE)`

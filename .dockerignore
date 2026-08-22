@@ -1,0 +1,25 @@
+# node_modules is 1.2 GB and is reinstalled in the builder from the lockfile anyway. Sending it as
+# build context would dominate the build time and risks carrying host-platform binaries (the
+# workerd optional dep resolves per-platform) into a linux/amd64 image.
+node_modules
+packages/*/node_modules
+
+# Local deployment state. `.workerd/do-disk` and `keys.json` are a running deployment's durable
+# data -- copying them into an image would ship one machine's user data to every customer.
+.workerd
+.workerd-*
+.wrangler
+packages/*/.wrangler
+
+# Build output: regenerated in the builder stage. Stale copies here would silently win over a
+# fresh build for anything the Dockerfile copies before building.
+dist
+packages/*/dist
+packages/*/dist-app
+packages/*/src/generated
+
+.git
+.github
+*.log
+.env.local
+.DS_Store
