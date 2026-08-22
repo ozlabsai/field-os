@@ -1,4 +1,4 @@
-import { AdminApi, AdminFormat, AdminFormatPatch, AdminResourceVendor, AdminSettingsView, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, isAmbientGatekeeperMode, isBannerColor, isHexColor } from '@gadgets/workshop-shared/api';
+import { AI_MODEL_PROVIDERS, AdminApi, AdminFormat, AiModelProvider, AdminFormatPatch, AdminResourceVendor, AdminSettingsView, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, isAmbientGatekeeperMode, isBannerColor, isHexColor } from '@gadgets/workshop-shared/api';
 import { GatekeeperVendor } from '@gadgets/workshop-shared/gatekeeper';
 import { DurableObject } from 'cloudflare:workers';
 import { RpcTarget } from 'capnweb';
@@ -313,6 +313,9 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
       accentColor: config.accentColor,
       resourceVendors: await this.#listResourceConfig(config, adminUserId),
       formats: await this.#listFormatConfig(config),
+      modelProviders: AI_MODEL_PROVIDERS.map(id => ({
+        id, enabled: !config.disabledModelProviders.includes(id),
+      })),
       sessionBounds: sessionBoundsView(this.env, config),
       orgSeparation: orgSeparationView(this.env),
     };
@@ -427,6 +430,19 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
       if (enabled) disabled.delete(urlPattern); else disabled.add(urlPattern);
       if (disabled.size === 0) delete map[vendorId]; else map[vendorId] = [...disabled];
       return { ...config, disabledResources: map };
+    });
+  }
+
+  async setModelProviderEnabled(provider: AiModelProvider, enabled: boolean): Promise<void> {
+    // Re-validated despite the parameter type: this arrives over RPC, so the declared type is a
+    // contract with well-behaved callers rather than a guarantee about the bytes on the wire.
+    if (!(AI_MODEL_PROVIDERS as readonly string[]).includes(provider)) {
+      throw new Error(`Unknown model provider "${provider}".`);
+    }
+    await this.#mutateAdminConfig(config => {
+      let disabled = new Set(config.disabledModelProviders);
+      if (enabled) disabled.delete(provider); else disabled.add(provider);
+      return { ...config, disabledModelProviders: [...disabled] };
     });
   }
 
@@ -588,6 +604,10 @@ export class AdminApiImpl extends RpcTarget implements AdminApi {
       throw new Error(`Instructions too long (max ${MAX_INSTANCE_INSTRUCTIONS_LENGTH} characters).`);
     }
     await this.admin.updateAdminConfig({ instanceInstructions: text });
+  }
+
+  setModelProviderEnabled(provider: AiModelProvider, enabled: boolean): Promise<void> {
+    return this.admin.setModelProviderEnabled(provider, enabled);
   }
 
   setResourceEnabled(vendorId: string, urlPattern: string, enabled: boolean): Promise<void> {

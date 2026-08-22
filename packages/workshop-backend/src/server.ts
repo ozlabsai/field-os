@@ -271,15 +271,20 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     return new Uint8Array(result);
   }
 
-  getAiConfig(): Promise<AiGatewayInfo> {
+  async getAiConfig(): Promise<AiGatewayInfo> {
+    // One cheap KV get (readAdminConfig reads the mirrored key, not the DO), and this is called
+    // once when the model picker opens rather than on a hot path.
+    let disabledProviders =
+        (await readAdminConfig(this.env)).disabledModelProviders as AiModelProvider[];
     let gwConfig = getAiGatewayConfig(this.env);
     if (gwConfig) {
-      return Promise.resolve({
+      return {
         enabled: true,
         enabledProviders: [...gwConfig.providers] as AiModelProvider[],
-      });
+        disabledProviders,
+      };
     } else {
-      return Promise.resolve({ enabled: false });
+      return { enabled: false, disabledProviders };
     }
   }
 

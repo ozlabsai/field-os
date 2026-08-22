@@ -694,6 +694,14 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       throw new Error(`Provider "${config.provider}" is not available in AI Gateway mode.`);
     }
 
+    // Enforced here and not only in the picker. The admin panel hides a disabled provider, but a
+    // hidden option is a UI preference rather than a control -- this method is reachable from
+    // gadget-authored code over the API, so the deployment's answer has to be given by the server.
+    let adminConfig = await readAdminConfig(this.env);
+    if (adminConfig.disabledModelProviders.includes(config.provider)) {
+      throw new Error(`Provider "${config.provider}" is not offered by this deployment.`);
+    }
+
     profile.type = "agent";
     this.storage.aiModels.put({profile, config});
   }

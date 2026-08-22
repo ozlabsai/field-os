@@ -8,7 +8,7 @@
 // changed by a compromised admin session. Everything here is enabled by default; the admin UI opts
 // things *out*.
 
-import { AmbientGatekeeperMode, BannerConfig, BlueprintBinding, BlueprintMetadata, BlueprintOutput, DEFAULT_BANNER_COLOR, OutputFormatOffer, isAmbientGatekeeperMode, isBannerColor, isOutputIcon } from "@gadgets/workshop-shared/api";
+import { AI_MODEL_PROVIDERS, AmbientGatekeeperMode, BannerConfig, BlueprintBinding, BlueprintMetadata, BlueprintOutput, DEFAULT_BANNER_COLOR, OutputFormatOffer, isAmbientGatekeeperMode, isBannerColor, isOutputIcon } from "@gadgets/workshop-shared/api";
 import { SupportedResource } from "@gadgets/workshop-shared/gatekeeper";
 import { ADMIN_CONFIG_KEY, BlueprintKvEnv, readBlueprintKvRecord, sanitizeBlueprintOutput } from "./blueprint-archive.js";
 
@@ -34,6 +34,16 @@ export type AdminConfig = {
   disabledResources: Record<string, string[]>;
   // Fully-disabled gatekeeper vendor ids.
   disabledGatekeepers: string[];
+  // Model providers this deployment does NOT offer, by AiModelProvider id.
+  //
+  // Empty (the default) offers all of them, matching how connectors and resources work: the admin
+  // opts *out* rather than in, so a new provider added upstream appears without every deployment
+  // having to enable it.
+  //
+  // The point is deployment fit rather than reachability. An airgapped install cannot use the
+  // hosted providers at all, and listing them invites a user to configure a model that can never
+  // answer -- a failure they meet at their first chat, far from the picker that offered it.
+  disabledModelProviders: string[];
   // Per-vendor provisioning mode for auto-provisioning ("ambient") gatekeepers (e.g. the Context
   // Library). Absent ⇒ the default ("optional", see provisioning-policy.ts). Only meaningful for
   // vendors that declare autoProvisionsAccount.
@@ -82,6 +92,7 @@ export const DEFAULT_ADMIN_CONFIG: AdminConfig = {
   accentColor: "",
   disabledResources: {},
   disabledGatekeepers: [],
+  disabledModelProviders: [],
   ambientGatekeeperModes: {},
   formats: [],
 };
@@ -291,6 +302,12 @@ export function parseAdminConfig(raw: string | null): AdminConfig {
       accentColor: typeof p.accentColor === "string" ? p.accentColor : "",
       disabledResources,
       disabledGatekeepers: strings(p.disabledGatekeepers).map(v => v.toLowerCase()),
+      // Filtered to known providers rather than passed through. An id that no longer exists (a
+      // provider renamed or removed upstream) would otherwise sit in stored config disabling
+      // nothing, and reappear in the admin panel as a checkbox for something that is gone.
+      disabledModelProviders: strings(p.disabledModelProviders)
+          .map(v => v.toLowerCase())
+          .filter(v => (AI_MODEL_PROVIDERS as readonly string[]).includes(v)),
       ambientGatekeeperModes,
       // Absent/invalid ⇒ undefined ⇒ resolveSessionPolicy() uses the env ceiling. Values above
       // the ceiling are not rejected here; they are clamped at resolve time, so lowering the

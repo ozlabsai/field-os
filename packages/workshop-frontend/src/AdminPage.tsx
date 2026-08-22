@@ -3,7 +3,7 @@ import { RpcStub } from 'capnweb'
 import { Switch, Textarea, Input, Button, Tabs, useKumoToastManager } from '@cloudflare/kumo'
 import { Hexagon, ShieldWarning, UserPlus } from '@phosphor-icons/react'
 import { useAuthenticatedApi } from './AuthContext'
-import { AdminApi, AdminFormat, AdminResourceVendor, AdminOrgSeparation, AdminSessionBounds, AmbientGatekeeperMode, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR, OrgLookup } from '@gadgets/workshop-shared/api'
+import { AdminApi, AdminFormat, AdminModelProvider, AdminResourceVendor, AiModelProvider, AdminOrgSeparation, AdminSessionBounds, AmbientGatekeeperMode, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR, OrgLookup } from '@gadgets/workshop-shared/api'
 import { applyAccentColor, DEFAULT_ACCENT_COLOR } from './theme'
 import { cacheBustSiteLogoUrl, prepareSiteLogo } from './siteLogoUtils'
 import SiteLogo from './components/SiteLogo'
@@ -28,6 +28,16 @@ const BANNER_SWATCH: Record<BannerColor, string> = {
   warning: 'var(--color-kumo-warning)',
   danger: 'var(--color-kumo-danger)',
   brand: 'var(--color-accent-100)',
+}
+
+// Display labels for the model providers. Presentation rather than API: the shared type carries
+// ids, and AddModelModal keeps its own copy for the same reason.
+const PROVIDER_LABELS: Record<AiModelProvider, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google',
+  cloudflare: 'Cloudflare Workers AI',
+  ollama: 'Local / OpenAI-compatible',
 }
 
 export default function AdminPage() {
@@ -74,6 +84,8 @@ export default function AdminPage() {
 
   // Whether new account signups are allowed.
   const [signupsEnabled, setSignupsEnabled] = useState(true)
+  const [modelProviders, setModelProviders] = useState<AdminModelProvider[]>([])
+  const [savingProvider, setSavingProvider] = useState<string | null>(null)
   const [savingSignups, setSavingSignups] = useState(false)
 
   // Session bounds: the admin's stored choice (drafts kept as strings so the field can be empty,
@@ -113,6 +125,7 @@ export default function AdminPage() {
   // Populate all editor state from a freshly-fetched settings view.
   const applySettings = (view: Awaited<ReturnType<RpcStub<AdminApi>['getSettings']>>) => {
     setSignupsEnabled(view.signupsEnabled)
+    setModelProviders(view.modelProviders)
     setSavedSiteName(view.siteName)
     setSiteNameDraft(view.siteName)
     setSiteLogoUrl(view.siteLogo?.url ?? null)
@@ -183,6 +196,22 @@ export default function AdminPage() {
     if (!admin) return
     const view = await admin.api.getSettings()
     setResourceVendors(view.resourceVendors)
+  }
+
+  // Optimistic like the resource toggle beside it, and reverted on failure -- the server is the
+  // authority (addModel refuses a disabled provider regardless of what this panel shows).
+  const handleProviderToggle = async (provider: AiModelProvider, enabled: boolean) => {
+    if (!admin) return
+    setSavingProvider(provider)
+    setModelProviders((prev) => prev.map((p) => (p.id === provider ? { ...p, enabled } : p)))
+    try {
+      await admin.api.setModelProviderEnabled(provider, enabled)
+    } catch (err) {
+      setModelProviders((prev) => prev.map((p) => (p.id === provider ? { ...p, enabled: !enabled } : p)))
+      toasts.add({ title: err instanceof Error ? err.message : 'Update failed', variant: 'error' })
+    } finally {
+      setSavingProvider(null)
+    }
   }
 
   const handleResourceToggle = async (vendorId: string, urlPattern: string, enabled: boolean) => {
@@ -586,6 +615,39 @@ export default function AdminPage() {
           </div>
         </div>
       )}
+
+      {/* Which model providers this deployment offers. Every provider except the local one reaches
+          a hosted API, so an airgapped install cannot use them at all -- and listing a provider it
+          cannot reach invites a user to configure a model that never answers, a failure they meet
+          at their first chat rather than here. Off by default for nobody: a connected deployment
+          keeps all of them, matching how connectors and resources work. */}
+      <div className="rounded-xl border border-kumo-line bg-kumo-raised p-5">
+        <h2 className="text-lg font-semibold text-kumo-strong">AI model providers</h2>
+        <p className="text-sm text-kumo-subtle mt-0.5">
+          Which providers users can add models from. Turning one off hides it from the model picker
+          and stops new models being added; models already configured keep working.
+        </p>
+        <div className="mt-4 flex flex-col gap-3">
+          {modelProviders.map((p) => (
+            <div key={p.id} className="flex items-center gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-kumo-strong">{PROVIDER_LABELS[p.id] ?? p.id}</div>
+                {p.id === 'ollama' && (
+                  <div className="text-xs text-kumo-subtle mt-0.5">
+                    Self-hosted vLLM, TGI, llama.cpp, LM Studio or Ollama. The only one that works
+                    without internet access.
+                  </div>
+                )}
+              </div>
+              <Switch
+                checked={p.enabled}
+                disabled={savingProvider === p.id}
+                onCheckedChange={(enabled) => handleProviderToggle(p.id, enabled)}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* Session bounds. Two numbers, but three sources of truth: the ceiling is env-set and the
           admin can only tighten below it (never raise it — that's the whole point of it living in

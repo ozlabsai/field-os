@@ -735,6 +735,14 @@ export function isAmbientGatekeeperMode(value: unknown): value is AmbientGatekee
 // A bound gatekeeper in the admin gatekeeper-config UI, discriminated by `autoProvisions`:
 //   - an ordinary OAuth/resource gatekeeper has a binary `enabled` flag and `resources` to toggle;
 //   - an auto-provisioning ("ambient") gatekeeper has a three-state `ambientMode` and no resources.
+/** One model provider in the admin panel, with whether this deployment offers it. */
+export type AdminModelProvider = {
+  /** The {@link AiModelProvider} id. The panel supplies its own display label. */
+  id: AiModelProvider;
+  /** False once the admin turns it off; the picker then hides it and `addModel` refuses it. */
+  enabled: boolean;
+};
+
 export type AdminResourceVendor = {
   vendorId: string;
   displayName: string;
@@ -819,6 +827,9 @@ export const MAX_SITE_LOGO_DIMENSION = 512;
 export type AdminSettingsView = {
   // Whether new account signups are allowed.
   signupsEnabled: boolean;
+  // Every model provider, with whether this deployment offers it. Always the full set, so the
+  // panel can render a provider the admin has turned off (and turn it back on).
+  modelProviders: AdminModelProvider[];
   // Site name shown next to the top-bar logo ("" falls back to DEFAULT_SITE_NAME).
   siteName: string;
   /** Custom deployment logo, or undefined to use the default FieldOS mark. */
@@ -958,6 +969,15 @@ export interface AdminApi {
   // Soft enforcement: disabling hides the resource from the connect UI, the resource picker, and the
   // agent; it doesn't revoke a capability a gadget already holds.
   setResourceEnabled(vendorId: string, urlPattern: string, enabled: boolean): Promise<void>;
+
+  /**
+   * Offer or withhold a model provider deployment-wide.
+   *
+   * Withholding hides it from the model picker and makes `addModel` refuse it; models already
+   * configured against it are left alone, since deleting a user's model on an admin toggle would
+   * lose their settings for a decision that may be reverted.
+   */
+  setModelProviderEnabled(provider: AiModelProvider, enabled: boolean): Promise<void>;
 
   // Set a gatekeeper's availability. For an auto-provisioning ("ambient") gatekeeper, `mode` is the
   // full three-state (disabled / optional / enabled); for an ordinary gatekeeper only 'disabled' /
@@ -1115,17 +1135,42 @@ export type CloudflareAccountOption = {
   accountName: string;
 };
 
-// Supported AI providers. `"ollama"` is any self-hosted OpenAI-compatible chat-completions server
-// — vLLM, TGI, llama.cpp, LM Studio, Ollama — reached at `apiUrl`. The value is historical and
-// kept so existing model configs keep working; the UI labels it "Local / OpenAI-compatible".
-export type AiModelProvider = "openai" | "anthropic" | "google" | "cloudflare" | "ollama";
+/** Every {@link AiModelProvider} value, for runtime validation and for iterating the set. */
+export const AI_MODEL_PROVIDERS = ["openai", "anthropic", "google", "cloudflare", "ollama"] as const;
 
-// Information about the AI gateway configuration. Returned by `AuthenticatedApi.getAiConfig()`.
-export type AiGatewayInfo = {
+/**
+ * Supported AI providers. `"ollama"` is any self-hosted OpenAI-compatible chat-completions server
+ * — vLLM, TGI, llama.cpp, LM Studio, Ollama — reached at `apiUrl`. The value is historical and
+ * kept so existing model configs keep working; the UI labels it "Local / OpenAI-compatible".
+ *
+ * Derived from {@link AI_MODEL_PROVIDERS} so the runtime list and the type cannot drift: anything
+ * validating a provider id at runtime (admin config, for one) needs the values, and a hand-written
+ * second copy would eventually disagree with this union.
+ */
+export type AiModelProvider = typeof AI_MODEL_PROVIDERS[number];
+
+/**
+ * Which model providers this deployment offers, and how. Returned by
+ * `AuthenticatedApi.getAiConfig()`.
+ *
+ * Two independent narrowings, deliberately kept apart because they answer different questions and
+ * apply in different modes:
+ *
+ * - `enabled`/`enabledProviders` describe **AI Gateway mode**: when on, the gateway supplies
+ *   credentials and dictates the provider set, and suggested models are built in rather than
+ *   configured by the user.
+ * - `disabledProviders` is the **deployment admin's** choice, and applies either way. An airgapped
+ *   install cannot reach the hosted providers at all, so offering them invites a user to configure
+ *   a model that can never answer.
+ */
+export type AiGatewayInfo = ({
   enabled: true;
   enabledProviders: AiModelProvider[];
 } | {
   enabled: false;
+}) & {
+  /** Providers the admin has turned off. Empty means the deployment offers all of them. */
+  disabledProviders: AiModelProvider[];
 };
 
 // Configuration specifying how to connect to an AI model provider.

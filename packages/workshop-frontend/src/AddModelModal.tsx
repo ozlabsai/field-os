@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Dialog, Button, Input, Select, SensitiveInput, Collapsible, useKumoToastManager } from '@cloudflare/kumo'
-import { AiChatAuthorInfo, AiModelConfig, AiModelProvider, AiGatewayInfo, SUGGESTED_MODELS,
+import { AI_MODEL_PROVIDERS as ALL_PROVIDERS,
+  AiChatAuthorInfo, AiModelConfig, AiModelProvider, AiGatewayInfo, SUGGESTED_MODELS,
   SUGGESTED_MODEL_ENDPOINTS, normalizeModelApiUrl } from '@gadgets/workshop-shared/api'
 import { RpcStub } from 'capnweb'
 import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
@@ -133,9 +134,15 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const gatewayMode = aiConfig?.enabled === true
-  const enabledProviders: Set<string> | null = gatewayMode
-    ? new Set(aiConfig.enabledProviders)
-    : null
+  // Two independent narrowings, intersected: AI Gateway dictates a provider set when it is on, and
+  // the deployment admin can turn providers off in either mode. Folded into the one Set the option
+  // builder already consults rather than adding a second filter beside it.
+  const enabledProviders: Set<string> | null = (() => {
+    const disabled = new Set<string>(aiConfig?.disabledProviders ?? [])
+    const base = gatewayMode ? aiConfig.enabledProviders : ALL_PROVIDERS
+    if (!gatewayMode && disabled.size === 0) return null   // nothing to filter: offer everything
+    return new Set(base.filter(p => !disabled.has(p)))
+  })()
 
   // Reset all state when dialog closes
   useEffect(() => {
