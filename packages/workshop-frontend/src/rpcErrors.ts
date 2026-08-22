@@ -1,4 +1,5 @@
 import { AUTH_ERROR_MESSAGES, getAuthErrorCode } from '@gadgets/workshop-shared/api'
+import { notifySessionExpired } from './sessionExpiryBus'
 import { reportIssue } from './errorReporting'
 
 // Classifies errors surfaced through capnweb RPC. The backend runs with
@@ -91,6 +92,12 @@ export function logRpcFailure(
 ): boolean {
   const cls = classifyRpcError(err)
   if (cls === 'do-reset' && options?.reportSite) reportDoResetError(options.reportSite, err)
+  // An expired session is met by every in-flight caller at once, and each one on its own can only
+  // report an unrelated-looking failure -- five of them left the user an app that looked broken
+  // rather than a session that ended. Announce it here, at the one point they all pass through;
+  // AuthProvider owns what to do about it. This stays pure logging: it dispatches an event, it
+  // does not touch auth state.
+  if (cls === 'auth') notifySessionExpired()
   const transient = cls === 'do-reset' || cls === 'connection'
   if (transient) console.debug(message, err)
   else console.error(message, err)
