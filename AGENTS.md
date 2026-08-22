@@ -152,6 +152,16 @@ part is broken, and it is the only one that covers the checker itself. Note the 
 class bites in *reporting*, not engineering, and a false alarm about destroyed user data is its own
 kind of expensive.
 
+The same rule caught the mirror case the same day, and that one is worse. A check for whether a
+shipped bundle contained a fix was baselined against the *previous* release expecting three
+failures; **two passed**. Both matched strings that already existed elsewhere in the old build —
+`"Choose a model"` lived in two unrelated components, and a sentinel constant predated the change.
+Run only after the deploy it would have reported 3/3 green **whether or not the fix shipped**. A
+false negative is visible and gets chased; a false positive is invisible and gets believed, so a
+check that cannot fail is worse than no check. Prove each assertion discriminates by watching it go
+red against the state it is meant to reject — and for a string match, confirm the string is absent
+from the old build rather than merely present in the new one.
+
 **Grep is not a search.** A character class missing `_` hid two services and produced a confident
 false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
 declarations *inside a prompt template literal*. Resolve imports rather than matching names, and
