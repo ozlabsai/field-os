@@ -164,6 +164,28 @@ runner is down.
 
 ## Traps that have already cost time
 
+**Run the verification *before* the change, and predict what it will say.** The post-deploy check
+for `alpha.7` was baselined against the still-running `alpha.5` first, expecting exactly one failure
+(the image tag). It reported **two**. The second was a wrong path in the check itself —
+`/data/keys.json` rather than `/var/lib/fieldos/keys.json` — and its output,
+`FAIL keys.json missing or empty`, is **character-identical to the output of genuine total data
+loss**, which per point 2 above is the deployment's worst silent failure.
+
+Run only *after* the deploy, that reads as two failures and a coherent story: the pod replacement
+destroyed user data. Nothing in the output distinguishes it from the truth. The real state was
+`keys.json` at 1967 bytes with all 24 DO directories present.
+
+What caught it was not inspecting the script — nothing about it looks wrong — but that **one
+failure was predicted and two arrived.** That makes this a different mechanism from every other
+trap here, which are all "a tool answered truthfully about the wrong question" and are caught by
+examining the tool. A pre-run baseline needs no hypothesis about which part is broken, and covers
+the part nothing else does: *the checking apparatus itself*. The probe-arming counters elsewhere in
+these docs only help once you already suspect a specific hook can be inert.
+
+Note the direction of the near-miss: this one would have bitten in **reporting**, not engineering.
+Telling the deployment's owner their users' data was destroyed, wrongly, is its own kind of
+expensive.
+
 **`kubectl auth can-i` will tell you a secret is protected when it is not.** Helm stores release
 state as Secrets and must `list` them to enumerate revisions. A Kubernetes **`list` returns every
 object's full body, including `data`** — there is no way to filter fields out of a list response.
