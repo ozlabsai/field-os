@@ -351,8 +351,12 @@ test.skip("a callback stub keeps dup() when it crosses into the loaded worker (O
   const connected = await gadget.connectToGadget();
 
   // A callback the gadget can call back into, exactly as a real gadget UI would pass.
+  /** @type {any[]} */
   let delivered = [];
-  const callback = { update(state) { delivered.push(state); } };
+  const callback = {
+    /** @param {any} state */
+    update(state) { delivered.push(state); },
+  };
   const report = await connected.probeCallback(callback);
 
   // Liveness first: every assertion below is meaningless if the gadget never started.
@@ -391,7 +395,7 @@ test("PROBE: what kinds of argument survive the loader boundary", async () => {
   const report = await connected.probeArgs(
     { update() {} },                 // a plain object the client passes as a callback
     { ping: async () => "pong" },    // an object with an async method
-    () => "called",                  // a bare function
+    /** @param {string} v */ (v) => `called:${v}`,   // a bare function
   );
 
   expect(report.alive).toBe("gadget-ran");
@@ -421,8 +425,9 @@ test("a gadget can retain a function callback and call it back later (OZL-134 en
   /** @type {any} */
   const connected = await gadget.connectToGadget();
 
+  /** @type {any[]} */
   const received = [];
-  const sub = await connected.subscribe((payload) => { received.push(payload); });
+  const sub = await connected.subscribe(/** @param {any} payload */ (payload) => { received.push(payload); });
   expect(sub.subscribed).toBe(true);
 
   // A SEPARATE call, after subscribe() returned. Without dup() the stub is disposed by now and
