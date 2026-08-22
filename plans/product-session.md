@@ -148,6 +148,26 @@ should degrade cleanly. If it degrades *badly*, that IS worth reporting.
 
 ---
 
+## One extra thing, for the restore drill afterwards
+
+**While you are in there, write down something specific and checkable from what you build.** A
+gadget title, a value in its output, a line you sent in chat — anything exact.
+
+Why: the restore drill runs after this session, and its verification instruction is *"open a
+workspace in the UI, **not** `quick_check`"* — because a torn WAL pair passes every structural check
+while quietly missing the last transactions, which is the failure the backup exists to prevent. That
+check needs content. Right now `do-disk` is **1.6M across 49 essentially-empty databases**, so a
+drill today would prove the mechanics (stop, wipe, copy, boot, `keys.json` resolves) and could not
+prove the thing that matters.
+
+With something specific noted, restore verification becomes *"this exact content is still there"*
+rather than *"a workspace opens"* — checking transactions rather than structure. Predicted before
+the operation, so the check can actually fail.
+
+- [ ] Noted something exact from a workspace I built: ______________________
+
+---
+
 ## What I need back
 
 Rough notes are fine — bullet points beat prose. Most useful:
