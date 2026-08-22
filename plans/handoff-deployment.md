@@ -13,8 +13,8 @@ learned, what is unverified, and what to do next.
 ## Where things stand
 
 **FieldOS is live at https://os.ozlabs.ai**, on GKE, with TLS, behind a shared-secret gate. A git
-tag builds, tests and pushes a verified image; the *deploy* half of that pipeline is blocked on
-cluster reachability (see below), so applying a release is still three manual commands. Every row
+tag now builds, tests, pushes **and deploys** — the cluster-reachability block is fixed by an
+in-cluster runner (`deploy/ci-runner/`, PR #128, 2026-08-22). Every row
 below was verified by execution, not inference:
 
 | | |
@@ -75,6 +75,7 @@ container exists to run. If size matters, prune by name (`wrangler`, `typescript
 | `scripts/setup-github-deploy.sh` | one-time WIF setup; no service-account key ever created |
 | `restore-rehearsal.mjs` | the drill `fieldos.md:415` asks for, executed |
 | `docs/deployment-gcp.md` | install, upgrade, backup/restore, limitations |
+| `deploy/ci-runner/` | in-cluster GitHub Actions runner; unblocks tag-to-deploy (#128) |
 | Admin model providers (#123) | `AdminConfig.disabledModelProviders`, enforced in `addModel` |
 
 `run-workerd.mjs` gained `--bundle-only`, `--use-bundles`, `--state <dir>`, `FIELDOS_PUBLIC_URL`,
@@ -82,11 +83,10 @@ and the `keys.json` guard.
 
 ## What to pick up next
 
-**One thing is blocked, and it is the only thing:** the tag-to-deploy pipeline cannot reach the
-cluster. See "The pipeline's one failure" below. Everything else is in rough order of value:
+**Nothing is blocked.** The pipeline's one failure is fixed (see below). In rough order of value:
 
-0. **Give the deploy job a runner inside the VPC.** Decided 2026-08-22; not built. The workflow is
-   correct and every other step passes — this is an infrastructure gap, not a code one.
+0. ~~**Give the deploy job a runner inside the VPC.**~~ **Done 2026-08-22**, PR #128 —
+   `deploy/ci-runner/`. A pod in the cluster bypasses Master Authorized Networks entirely.
 
 1. **Use the product.** The largest gap by far. Signup and the RPC transport are browser-verified;
    *building a gadget*, the walkthrough, and a real workspace are not. This is the difference
@@ -104,7 +104,7 @@ cluster. See "The pipeline's one failure" below. Everything else is in rough ord
 5. **Image size**, if cold-node pull time becomes a complaint. See point 5 above for why
    `pnpm --prod` is the wrong lever.
 
-## The pipeline's one failure, and the decided fix
+## The pipeline's one failure, and the fix that shipped
 
 `v0.1.0-alpha.6` ran the full workflow on 2026-08-22. **Gate, WIF authentication, image build and
 image push all succeeded** — `alpha.6` is in Artifact Registry, pushed by CI. It failed at
@@ -127,20 +127,58 @@ this: it is a property of the cluster, not of the YAML, and only running it surf
 image, uninterrupted. The step ordering (upgrade before any pod mutation) is what made a failed
 deploy a no-op instead of a half-applied one.
 
-**Decided fix: a self-hosted runner inside the VPC**, which reaches the API server privately and
-leaves the allowlist closed. Not built. Rejected alternatives, with reasons:
+**Fixed 2026-08-22 by an in-cluster runner** (`deploy/ci-runner/`, PR #128). The important
+discovery, which narrowed the work considerably: **a pod in the cluster reaches the API server
+through `kubernetes.default.svc` and never consults Master Authorized Networks at all** — no VM, no
+NAT, no allowlist change, no service-account key. Verified by execution with both halves measured:
+in-cluster `/version` returned **200** via the ServiceAccount token, while the external endpoint
+`34.45.224.238` **timed out** from the same probe.
+
+Only the *cluster* steps moved. `build` stays on `ubuntu-latest`, where Docker and WIF work and
+always did — that half never failed. Because build stayed hosted, the runner needs no Docker
+daemon: unprivileged, no socket mount, `kubectl` and `helm` and nothing else, and it authenticates
+with its pod ServiceAccount rather than fetching external credentials (which would reintroduce the
+allowlisted-source dependency the job exists to avoid).
+
+Rejected alternatives, with the reasons that still stand:
 
 - *Allowlist GitHub's published ranges* — a large, shared, frequently-changing set; it would
   effectively open the control plane to anyone running a GitHub Action.
 - *Cloud Build / Cloud Run job* — viable, keeps `git tag` as the trigger, but moves the deploy out
   of the workflow and needs its own network configuration.
-- *Drop the cluster steps and deploy by hand* — the fallback if the runner is not worth it. CI would
-  still produce a gated, verified image; only the last three steps are manual.
+- *Drop the cluster steps and deploy by hand* — the fallback if the runner had not been worth it.
+- *A GCE VM in the VPC* — a conventional self-hosted runner, independent of cluster health, but an
+  always-on VM to patch and own. Unnecessary once the in-cluster path was measured.
 
-**Until it is fixed, a tag builds and pushes a verified image and stops there.** Deploy with the
-three commands in `docs/deployment-gcp.md` (helm upgrade, delete pod, wait).
+The three manual commands in `docs/deployment-gcp.md` still work and remain the fallback if the
+runner is down.
 
 ## Traps that have already cost time
+
+**`kubectl auth can-i` will tell you a secret is protected when it is not.** Helm stores release
+state as Secrets and must `list` them to enumerate revisions. A Kubernetes **`list` returns every
+object's full body, including `data`** — there is no way to filter fields out of a list response.
+So a Role with collection `list` on secrets grants read of *every* secret in the namespace, while
+`kubectl auth can-i get secret/fieldos-site-gate` still answers **no**. Measured, not reasoned: a
+ServiceAccount holding only `list` received `SITE_PASSWORD` in a 200 body. `resourceNames` cannot
+close it either, because helm must `create` the next revision, whose name does not exist at
+admission time. The consequence for this deployment is deliberate and documented at the RBAC rule
+in `deploy/ci-runner/runner.yaml`: **repo write access now implies gate-password read.** The fix, if
+that ever becomes unacceptable, is Secret Manager via the CSI driver — not RBAC, which cannot
+express it.
+
+**An unknown step output in GitHub Actions expands to the empty string, not an error.** Splitting
+the deploy job left `env: VERSION: ${{ steps.version.outputs.version }}` in a job that no longer had
+that step. It does not fail: it silently becomes `""`, so `helm upgrade --set image.tag=` would set
+an empty tag and `Verify` would fail two steps *after* the pod had already been replaced.
+
+**The ordering is the dangerous part**: the failure lands *after* the destructive action, so the
+signal arrives when the deployment is already mutated rather than while it is still safe. Same
+family as the other traps here — the tooling reported success about something other than the
+question asked. Caught by reading the split output, not by anything that would have warned.
+
+A job-level `env` from `needs.<job>.outputs` is the fix, but the step-level one must be *removed*:
+a step-level `env` wins over job-level, so leaving it shadows the correct value with the empty one.
 
 **Kubernetes injects a variable named after your Service.** A Service named `fieldos` produces
 `FIELDOS_PORT=tcp://10.30.11.195:80` in every pod in the namespace, which collided with the
