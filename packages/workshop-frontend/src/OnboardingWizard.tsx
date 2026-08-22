@@ -296,9 +296,17 @@ export default function OnboardingWizard({
         await authenticatedApi.setAvatar(avatarData)
         if (currentUser?.id) invalidateAvatarCache(currentUser.id)
       }
-      // selectedModelId is null when the user chose "No agent" or didn't pick one
       await authenticatedApi.setPreferredModel(selectedModelId)
-      persistSelectedModel(selectedModelId)
+      // Only persist a real choice. The wizard pre-selects the first model (see the effect above)
+      // and offers no "No agent" option, so `selectedModelId` is null only when the deployment had
+      // no models at wizard time -- which is not a decision to decline inference.
+      //
+      // Persisting null writes the NO_AGENT sentinel, and that sentinel permanently defeats
+      // `getStoredSelectedModel`'s "fall back to the first configured model" behaviour: a user who
+      // onboarded before any model existed would then send every message with no model, forever,
+      // and the composer would read "No agent" beside a list of model names. That is a silent dead
+      // end -- the message goes nowhere and nothing says why (OZL-313).
+      if (selectedModelId !== null) persistSelectedModel(selectedModelId)
       await authenticatedApi.completeOnboarding()
       onComplete()
     } catch (err) {
