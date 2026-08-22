@@ -1,5 +1,14 @@
 # Twenty minutes in the product — a script for Guy
 
+> **The working copy is the published artifact**, which has the same content plus checkboxes that
+> persist as you go: https://claude.ai/code/artifact/85b5c6fe-bad7-4fd4-acff-53adf0062af2
+>
+> This file is the tracked record of what was asked and why. The two were briefly hand-synced and
+> immediately drifted in step ordering — "derive, never restate" applies to documents as well as
+> code, and there is no derivation available here (the artifact needs real HTML for the persisting
+> checkboxes). So: **edit the artifact, and update this file only when the substance changes**, not
+> for presentation. If they disagree, the artifact is what Guy actually used.
+
 The largest gap in FieldOS is not infrastructure. Signup and the RPC transport are browser-verified;
 **building a gadget, the guided walkthrough, and a real workspace are not.** Nobody has used it.
 
@@ -138,16 +147,6 @@ should degrade cleanly. If it degrades *badly*, that IS worth reporting.
 
 ---
 
-## Known noise — do not report these
-
-| | |
-|---|---|
-| A `useAuthenticatedApi` console error during signup | OZL-312, closed low priority, cosmetic, app recovers |
-| Gadget PDF export unavailable | no `BROWSER` binding off-platform; should degrade cleanly |
-| Blueprints fetchable unauthenticated by id | OZL-223, known |
-
----
-
 ## One extra thing, for the restore drill afterwards
 
 **While you are in there, write down something specific and checkable from what you build.** A
@@ -165,6 +164,18 @@ rather than *"a workspace opens"* — checking transactions rather than structur
 the operation, so the check can actually fail.
 
 - [ ] Noted something exact from a workspace I built: ______________________
+
+---
+
+---
+
+## Known noise — do not report these
+
+| | |
+|---|---|
+| A `useAuthenticatedApi` console error during signup | OZL-312, closed low priority, cosmetic, app recovers |
+| Gadget PDF export unavailable | no `BROWSER` binding off-platform; should degrade cleanly |
+| Blueprints fetchable unauthenticated by id | OZL-223, known |
 
 ---
 
