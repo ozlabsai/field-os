@@ -142,6 +142,16 @@ from the schema" are different claims and should not be written the same way. Th
 delegated work: several agent findings were wrong in both directions, including a warning that the
 R2 protocol would be far harder than KV, which execution refuted.
 
+**Run a check before the change, and predict what it will say.** A verification script is
+apparatus, and nothing else verifies it. A post-deploy check reported `keys.json missing or empty` —
+character-identical to the output of genuine total data loss — when the real fault was a wrong path
+in the check (`/data` vs `/var/lib/fieldos`). Run only afterwards, it reads as a coherent story
+about user data being destroyed. What caught it was that **one failure was predicted and two
+arrived**. This is a different mechanism from the rules above: it needs no hypothesis about which
+part is broken, and it is the only one that covers the checker itself. Note the direction — this
+class bites in *reporting*, not engineering, and a false alarm about destroyed user data is its own
+kind of expensive.
+
 **Grep is not a search.** A character class missing `_` hid two services and produced a confident
 false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
 declarations *inside a prompt template literal*. Resolve imports rather than matching names, and

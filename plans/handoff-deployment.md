@@ -127,7 +127,16 @@ this: it is a property of the cluster, not of the YAML, and only running it surf
 image, uninterrupted. The step ordering (upgrade before any pod mutation) is what made a failed
 deploy a no-op instead of a half-applied one.
 
-**Fixed 2026-08-22 by an in-cluster runner** (`deploy/ci-runner/`, PR #128). The important
+**Fixed and proven 2026-08-22 by an in-cluster runner** (`deploy/ci-runner/`, PR #128).
+`v0.1.0-alpha.7` ran the full workflow end to end — gate, build, push, **helm upgrade**, pod
+replacement, verify — all green, and `Helm upgrade` is the exact step `alpha.6` died on. The
+runner's first job was a real release, not a rehearsal. Independently verified afterwards
+(9/9: image tag, readiness, the public edge through gate and TLS, the SPA shell, and
+`keys.json` byte-identical at 1967 bytes with all 24 DO directories intact). The ephemeral
+cycle also held: the runner took one job, exited, and the Deployment restarted it back to
+`Listening for Jobs` within a minute.
+
+The important
 discovery, which narrowed the work considerably: **a pod in the cluster reaches the API server
 through `kubernetes.default.svc` and never consults Master Authorized Networks at all** — no VM, no
 NAT, no allowlist change, no service-account key. Verified by execution with both halves measured:
@@ -154,6 +163,28 @@ The three manual commands in `docs/deployment-gcp.md` still work and remain the 
 runner is down.
 
 ## Traps that have already cost time
+
+**Run the verification *before* the change, and predict what it will say.** The post-deploy check
+for `alpha.7` was baselined against the still-running `alpha.5` first, expecting exactly one failure
+(the image tag). It reported **two**. The second was a wrong path in the check itself —
+`/data/keys.json` rather than `/var/lib/fieldos/keys.json` — and its output,
+`FAIL keys.json missing or empty`, is **character-identical to the output of genuine total data
+loss**, which per point 2 above is the deployment's worst silent failure.
+
+Run only *after* the deploy, that reads as two failures and a coherent story: the pod replacement
+destroyed user data. Nothing in the output distinguishes it from the truth. The real state was
+`keys.json` at 1967 bytes with all 24 DO directories present.
+
+What caught it was not inspecting the script — nothing about it looks wrong — but that **one
+failure was predicted and two arrived.** That makes this a different mechanism from every other
+trap here, which are all "a tool answered truthfully about the wrong question" and are caught by
+examining the tool. A pre-run baseline needs no hypothesis about which part is broken, and covers
+the part nothing else does: *the checking apparatus itself*. The probe-arming counters elsewhere in
+these docs only help once you already suspect a specific hook can be inert.
+
+Note the direction of the near-miss: this one would have bitten in **reporting**, not engineering.
+Telling the deployment's owner their users' data was destroyed, wrongly, is its own kind of
+expensive.
 
 **`kubectl auth can-i` will tell you a secret is protected when it is not.** Helm stores release
 state as Secrets and must `list` them to enumerate revisions. A Kubernetes **`list` returns every
