@@ -206,6 +206,11 @@ how many cases. And weigh the asymmetry before writing anything permanent from a
 a missing instruction gets discovered when someone needs it, while a wrong *"this does not work"*
 gets believed and never retested.
 
+The reader of a measurement has the cheaper half of this. *"Which shape did you test?"* costs one
+message; not asking it cost a permanent instruction that removed a working capability. When someone
+hands you a result and you are about to write something durable on top of it, ask what varied
+before you build on it.
+
 **Grep is not a search.** A character class missing `_` hid two services and produced a confident
 false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
 declarations *inside a prompt template literal*. Resolve imports rather than matching names, and

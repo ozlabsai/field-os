@@ -306,6 +306,18 @@ question asked. Caught by reading the split output, not by anything that would h
 A job-level `env` from `needs.<job>.outputs` is the fix, but the step-level one must be *removed*:
 a step-level `env` wins over job-level, so leaving it shadows the correct value with the empty one.
 
+**Grepping the deployed bundle works for prompt text and not for comments.** Verifying that a fix
+reached production by reading `/src/.workerd/bundles/workshop-backend/server.js` off the pod is
+sound — the tag says which image, only the bundle says which code. But the bundler **keeps** ordinary
+comments (3282 of them in that bundle) while **dropping leading JSDoc-style blocks on exported
+functions**, so a check keyed on a doc comment goes red against a working deployment and sends
+someone chasing a deploy failure that never happened.
+
+Grep for **code** (`isCatchable(result)`, `function isCatchable`) or for **prose inside a template
+literal** — the agent's system prompt survives intact, which is what made it possible to prove that
+a live pod was still serving the broken `gadget.subscribe(new Callback())` example. Neither half of
+this is guessable from the source.
+
 **Kubernetes injects a variable named after your Service.** A Service named `fieldos` produces
 `FIELDOS_PORT=tcp://10.30.11.195:80` in every pod in the namespace, which collided with the
 entrypoint's own `FIELDOS_PORT`. workerd tried to bind port `NaN` and died with
