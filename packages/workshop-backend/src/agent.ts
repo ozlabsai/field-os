@@ -428,6 +428,8 @@ Note that Cap'n Web is a bidirectional object capability protocol, meaning, amon
 
 Using functions this way is a great way to implement real-time updates. The client can "subscribe" to updates, passing a callback function to the server. The server can then call the function asynchronously whenever the state changes (perhaps due to activity of a different client). This technique should be used when implementing multiplayer collaboration.
 
+**CRITICAL: the callback you pass must be a FUNCTION, not an object with methods on it.** A Gadget's server code runs in a separate isolate, and only a function is converted into a live RPC stub when it crosses that boundary. An object — including a \`class Callback extends RpcTarget\` with an \`update()\` method — is structurally cloned instead and arrives with all of its methods gone, so \`callback.dup()\` throws \`callback.dup is not a function\` and the subscription silently never delivers. Pass the function itself.
+
 When implementing such a subscription, it is important to call \`.dup()\` on the callback stub, in order to obtain a long-lived stub. Otherwise, the stub received as a parameter is implicitly disposed at the end of the function. You should also use \`onRpcBroken\` to monitor for client disconnects, like:
 
 \`\`\`
@@ -443,21 +445,18 @@ async subscribe(callback) {
 And on the client:
 
 \`\`\`
-class Callback extends RpcTarget {
-  update(state) {
-    // update the UI
-  }
-
-  [Symbol.dispose]() {
-    // Connection lost. Resubscribe using new connection.
-    gadget.subscribe(this);
-  }
+// A bare function. NOT an object or a class instance -- those are cloned, not stub-ified,
+// and arrive at the server with their methods gone.
+function onUpdate(state) {
+  // update the UI
 }
 
-gadget.subscribe(new Callback());
+gadget.subscribe(onUpdate);
 \`\`\`
 
 The top-level \`gadget\` stub survives backend reconnects, and calls made while its replacement is being acquired will wait. However, other capabilities passed over RPC in either direction are disposed on disconnect, and must be re-acquired.
+
+**Never wrap a failing \`dup()\` in a try/catch and carry on.** Using the raw callback without \`dup()\` silently "succeeds": the stub is disposed when the call returns, the subscription never delivers, and the UI waits forever for state that never arrives — while you report the feature as working. That has happened, and it produced a blank page that read as a broken Gadget rather than a wrong callback shape. If a feature does not work, say so instead of reporting success.
 
 DO NOT import \`RpcTarget\` in client.js. It is already imported.
 
@@ -466,7 +465,7 @@ If you need \`RpcTarget\` in server.js, you can import it from "cloudflare:worke
 ## Design Tips
 
 * ALWAYS store server state in Durable Object storage, not just in memory. Memory is OK to use for caching but users expect not to have their experience disrupted when the server restarts.
-* If the user asks for a game or any sort of app where multiple users might collaborate, make sure multiple clients can connect at once and broadcast real-time updates to each other.
+* If the user asks for a game or any sort of app where multiple users might collaborate, make sure multiple clients can connect at once and broadcast real-time updates to each other. Pass a bare function as the subscription callback, not an object -- see the limitation above.
 * Clients may frequently reload, and there is no client-side storage, so there is no way to track long-lived "sessions". So, for example, if the user asks for a multiplayer game, you should design it so that any connected client can choose to be any player. If it's turn-based, you can just let any client make any move. If it's concurrent but with distinct players, let each client choose which player they are controlling, including letting multiple clients choose the same player.
 * If a Gadget contains a README.md file, use it to describe that Gadget at a high level and document anything that future agents (or humans) may need to know when editing the code. You don't need to document details that are obvious from looking at the code, or which most people and agents would know already.
 
