@@ -191,6 +191,21 @@ agent under test: treat its account of what happened as evidence and its account
 hypothesis. Doing so is not hedging; it puts the low-failure-rate claim where it survives the
 high-failure-rate one collapsing.
 
+**State the scope of a measurement, not just its result.** A sound measurement reported in a
+sentence broader than the thing measured produces confident wrong action, and nothing downstream can
+detect it — the number is right, so it survives every check. One probe showed a callback arriving in
+a gadget as a plain object with its methods gone; that was reported as "the callback does not arrive
+as a stub", and a permanent instruction was written telling the agent that gadget subscriptions do
+not work and to poll instead. Exactly one callback *shape* had been tested. A bare function crosses
+the same boundary as a live stub with a working `dup()`, and the whole feature works. The failing
+shape was the one the prompt itself taught.
+
+*"An object callback arrives dead"* and *"callbacks arrive dead"* differ by one word and lead to
+opposite instructions. So name what varied and what did not: which shape, which path, which version,
+how many cases. And weigh the asymmetry before writing anything permanent from a single measurement —
+a missing instruction gets discovered when someone needs it, while a wrong *"this does not work"*
+gets believed and never retested.
+
 **Grep is not a search.** A character class missing `_` hid two services and produced a confident
 false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
 declarations *inside a prompt template literal*. Resolve imports rather than matching names, and
