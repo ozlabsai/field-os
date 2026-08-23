@@ -555,7 +555,11 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
           height: '100%',
           border: 'none'
         }}
-        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+        // allow-forms is required for a <form> submit handler to run at all: without it the browser
+        // blocks the submission before any script sees it, so preventDefault() never happens and an
+        // ordinary form-based gadget silently does nothing. It does not let a form reach the
+        // network -- the CSP above still carries form-action 'none' and connect-src 'none'.
+        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms"
         title="Gadget UI"
       />
       {renderedNothing && (

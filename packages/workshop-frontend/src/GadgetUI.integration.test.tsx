@@ -569,4 +569,20 @@ describe('GadgetUI RPC recovery', () => {
     expect(container.textContent).not.toContain('client.js exports no UI')
     expect(container.querySelector('iframe')).toBe(iframe)
   })
+
+  it('allows form submit handlers to run inside the sandbox', async () => {
+    // A gadget built around an ordinary <form> is idiomatic and the agent writes them. Without
+    // allow-forms the browser blocks the submission before any script runs, so preventDefault()
+    // never happens and the gadget silently does nothing while rendering perfectly. Verified in
+    // Chrome: the submit handler does not fire at all under the old sandbox attribute.
+    const gadget = fakeGadget('form', 'document.body.textContent = "form"')
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
+    })
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    const sandbox = container.querySelector('iframe')!.getAttribute('sandbox') || ''
+    expect(sandbox.split(/\s+/)).toContain('allow-forms')
+    // The CSP, not the sandbox, is what keeps a form off the network.
+    expect(container.querySelector('iframe')!.getAttribute('srcdoc')).toContain("form-action 'none'")
+  })
 })
