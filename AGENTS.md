@@ -211,6 +211,33 @@ message; not asking it cost a permanent instruction that removed a working capab
 hands you a result and you are about to write something durable on top of it, ask what varied
 before you build on it.
 
+**A waiting tool's exit code is not its answer.** `gh pr checks` exits **8** while checks are still
+pending, so `until gh pr checks ... 2>/dev/null; do sleep; done` treats "still running" as "done"
+and returns instantly with no output. Three CI waiters completed against still-running builds before
+this was noticed, and a second session independently reproduced it — having already filed one
+implausibly fast "settle" as *CI being quick*.
+
+That is what makes this class expensive rather than merely annoying: the failure **supplies its own
+innocent explanation**, so the anomaly gets absorbed instead of investigated, and the next step
+proceeds on a green that was never measured. Key a wait on the *content* — `--json bucket --jq
+'.[] | select(.bucket=="pending")'` and wait for empty — not on the exit status, and confirm the run
+you are waiting on is the one built from your HEAD sha rather than a superseded run of the same
+branch.
+
+**A capability sweep needs one row whose answer you already know.** Five sandbox probes were run
+across three iframe `sandbox` variants to find which browser capabilities fail silently. All
+**fifteen rows came back identical across all three variants** — including a form-submit row *known*
+to differ from a separate clean measurement. The harness was not exercising the sandbox at all and
+every row was junk.
+
+Nothing about the individual results looked wrong; *"downloads fail silently, clipboard is blocked"*
+is entirely plausible, and run with a single variant — as the first version was — they would have
+been reported as findings and accepted by a reviewer with context left to spend. The only thing that
+caught it was a row with a **predicted** result, and the prediction failing. This is the pre-run
+baseline applied to a capability sweep, and it is the cheapest form of it: one known row costs
+nothing and validates the other fourteen. A result that does not vary with the input is a broken
+instrument, not a finding.
+
 **Grep is not a search.** A character class missing `_` hid two services and produced a confident
 false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
 declarations *inside a prompt template literal*. Resolve imports rather than matching names, and
