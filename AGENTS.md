@@ -126,6 +126,15 @@ as principle. The incidents behind them are recorded in `plans/handoff.md` § Tr
 `plans/handoff-deployment.md` § Traps, which hold more detail and more cases than are distilled
 here.
 
+These are cheaper than they look, and the one evening where both sides were counted is worth
+quoting: writing up two rules cost five invalidated CI cycles, and the habit they describe caught
+**five** broken instruments in the same hours — three failed harnesses, a class of stale CI waiters
+that fired completions against superseded builds, and the command being used to count these rules.
+None was caught by noticing something looked wrong; every one was caught by an expectation stated
+*before* the result. That asymmetry is the whole practice.
+Predicting what a check will say costs a sentence, and it is the only thing here that has ever
+caught an error in the checking itself.
+
 **Plan claims are hypotheses until executed.** `plans/*.md` records reasoning, not guarantees. Two
 plausible, load-bearing claims were wrong: "R2 → MinIO, R2's API is S3-compatible" conflated R2's
 *S3 endpoint* with the *binding*, which MinIO cannot serve; "local inference is zero code changes"
@@ -211,10 +220,71 @@ message; not asking it cost a permanent instruction that removed a working capab
 hands you a result and you are about to write something durable on top of it, ask what varied
 before you build on it.
 
-**Grep is not a search.** A character class missing `_` hid two services and produced a confident
-false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
-declarations *inside a prompt template literal*. Resolve imports rather than matching names, and
-sanity-check a pattern before trusting a negative result.
+**A waiting tool's exit code is not its answer.** `gh pr checks` exits **8** while checks are still
+pending, so `until gh pr checks ... 2>/dev/null; do sleep; done` treats "still running" as "done"
+and returns instantly with no output. Three CI waiters completed against still-running builds before
+this was noticed, and a second session independently reproduced it — having already filed one
+implausibly fast "settle" as *CI being quick*.
+
+That is what makes this class expensive rather than merely annoying: the failure **supplies its own
+innocent explanation**, so the anomaly gets absorbed instead of investigated, and the next step
+proceeds on a green that was never measured. Key a wait on the *content* — `--json bucket --jq
+'.[] | select(.bucket=="pending")'` and wait for empty — not on the exit status, and confirm the run
+you are waiting on is the one built from your HEAD sha rather than a superseded run of the same
+branch. That second half is an independent way to wait on the wrong thing, and it fails in the same
+direction: a green reported about a build that is not yours.
+
+The failure survives knowing about it. While this rule was being written, one of the already-doomed
+waiters fired a completion notification against a superseded build — ten minutes after its own
+lesson had been learned, and it still arrived looking exactly like an answer. That is the argument
+for these living in a file rather than in someone's memory: in the moment, nothing prompts you to
+doubt a notification that says "completed".
+
+**A capability sweep needs one row whose answer you already know.** Five sandbox probes were run
+across three iframe `sandbox` variants to find which browser capabilities fail silently. All
+**fifteen rows came back identical across all three variants** — including a form-submit row *known*
+to differ from a separate clean measurement. The harness was not exercising the sandbox at all and
+every row was junk.
+
+Nothing about the individual results looked wrong; *"downloads fail silently, clipboard is blocked"*
+is entirely plausible, and run with a single variant — as the first version was — they would have
+been reported as findings and accepted by a reviewer with context left to spend. The only thing that
+caught it was a row with a **predicted** result, and the prediction failing. This is the pre-run
+baseline applied to a capability sweep, and it is the cheapest form of it: one known row costs
+nothing and validates the other fourteen. A result that does not vary with the input is a broken
+instrument, not a finding.
+
+Three separate harnesses failed in the hours around this being written, and the control caught all
+three — including the one built to demonstrate the rule, and including a case where the null result
+*matched a hypothesis its author wanted confirmed*. That last direction is the expensive one: a
+control is not merely a check on the apparatus, it is the only thing standing between a plausible
+null and your own prior.
+
+**Grep is not a search, and the scope is as wrong as the pattern.** A character class missing `_`
+hid two services and produced a confident false alarm; a name-based dead-code scan false-positived
+because `agent.ts` contains `export class` declarations *inside a prompt template literal*. Resolve
+imports rather than matching names, and sanity-check a pattern before trusting a negative result.
+
+The pattern is the half people check. **The scope is the half that keeps biting**, and it is the
+same defect wearing different clothes: a `grep -c … | head -1` over a two-file glob reported 0 for a
+probe that was there in the second file; a `preloadRoute` search ran over the wrong package; and a
+section was counted with a *guessed line window* (`sed -n '121,240p'`) which truncated it and
+undercounted — reproduced afterwards rather than restated: marker-bounded `awk` returns 10 where the
+guessed window returns 9. Each command was correct and each answer was confident and wrong.
+
+A line-numbered window is worse than wrong once: **it goes stale silently.** That window began at
+line 121, which is exactly where `## Verification posture` sat on `main` the day it was written — so
+it was correct when derived, and every edit above it since has moved the target with nothing to
+indicate it — and the session that wrote it reports the same command returning a different wrong
+count hours earlier, which is the failure this predicts. Bound a range by markers that exist in the
+file (`awk '/^## Heading/,/^---$/'`) rather than by line numbers you guessed, and state which paths
+you searched when you report a negative.
+
+Both of the last two were then **explained away rather than investigated** — "CI was quick", "the
+two you are counting are on another branch". Plausible, unfalsified, and about discrepancies that
+did not exist. When a count disagrees with someone else's, re-derive it with a bounded command
+before reaching for a story that reconciles them; the story arrives faster than the check and is
+much worse.
 
 **Derive, never restate.** When the same fact must exist in two places, compute the second from the
 first. Two people reached for this independently in one week without any guidance saying to:
@@ -238,6 +308,20 @@ Stated apart, three exchanges in one day each kept one half and discarded the ot
 caller identification survived a wrong mechanism, a sound bundle measurement survived a wrong
 conclusion drawn from it, and a good prompt rewrite survived the too-broad scope that prompted it.
 Every time, the surviving half was the one that had not been attached to the other.
+
+Two things about *which* claims a second reader actually checks, both learned the same evening. The
+separation has to reach **the most senior claim in the exchange**, or it produces deference rather
+than review: a manufactured explanation for a discrepancy — plausible, offered by the person doing
+the reviewing — survived until someone re-derived the number it was explaining. And it has to reach
+the most **comfortable** claim, which is the harder axis: a single sentence of praise compressed
+three sessions and two days into one wrong attribution — crediting the wrong session with a catch,
+naming a PR that had merged rather than been stopped — and went unexamined for a full exchange,
+because a flattering claim gives nobody a motive to check it. Neither party is positioned to: the
+author has no reason to doubt something generous, and the recipient has every reason not to. The
+correction *to that correction* then overclaimed in turn, calling a fix landed when it was still
+unmerged, which is the same pull running one level down. Senior and comfortable are different axes,
+and the second is the one nothing else in this file catches — a senior claim at least attracts
+scrutiny from being senior, while a flattering one actively suppresses it.
 
 **An intervention that can be inert must report whether it fired.** A hook, probe, blocker or
 filter that silently does nothing yields a null result indistinguishable from a real refutation,

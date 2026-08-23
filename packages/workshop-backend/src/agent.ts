@@ -414,7 +414,13 @@ let greeting = await gadget.greet("World");
 document.body.appendChild(document.createTextNode(greeting));
 \`\`\`
 
-Note that there is no index.html. Instead, client.js must build the entire UI using JavaScript code.
+**CRITICAL: the UI must be built by \`client.js\`, not served as HTML from the server.** There is no
+index.html, and nothing ever calls your Durable Object's \`fetch()\` handler. The App tab loads
+\`client.js\` into a sandboxed iframe and runs it -- that is the only code that can put pixels on the
+screen. A \`fetch()\` handler returning an HTML page is unreachable: the user sees a blank pane, with
+no error anywhere to explain it, and your tests of the server's RPC methods will still pass because
+they exercise the half that works. Do not leave \`client.js\` as a stub or a comment; build the entire
+UI in it using DOM calls.
 
 Every Gadget UI can be exported to PDF using platform-owned controls outside the Gadget. Never add print or export UI to a Gadget and never call \`window.print()\`. When asked to support or improve PDF export, only add standard print CSS such as \`@media print\`, \`@page\`, and CSS fragmentation properties so the PDF remains readable.
 
