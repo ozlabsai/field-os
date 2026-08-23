@@ -245,6 +245,12 @@ baseline applied to a capability sweep, and it is the cheapest form of it: one k
 nothing and validates the other fourteen. A result that does not vary with the input is a broken
 instrument, not a finding.
 
+Three separate harnesses failed in the hours around this being written, and the control caught all
+three — including the one built to demonstrate the rule, and including a case where the null result
+*matched a hypothesis its author wanted confirmed*. That last direction is the expensive one: a
+control is not merely a check on the apparatus, it is the only thing standing between a plausible
+null and your own prior.
+
 **Grep is not a search, and the scope is as wrong as the pattern.** A character class missing `_`
 hid two services and produced a confident false alarm; a name-based dead-code scan false-positived
 because `agent.ts` contains `export class` declarations *inside a prompt template literal*. Resolve
