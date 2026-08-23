@@ -126,6 +126,15 @@ as principle. The incidents behind them are recorded in `plans/handoff.md` § Tr
 `plans/handoff-deployment.md` § Traps, which hold more detail and more cases than are distilled
 here.
 
+These are cheaper than they look, and the one evening where both sides were counted is worth
+quoting: writing up two rules cost five invalidated CI cycles, and the habit they describe caught
+**five** broken instruments in the same hours — three failed harnesses, a class of stale CI waiters
+that fired completions against superseded builds, and the command being used to count these rules.
+None was caught by noticing something looked wrong; every one was caught by an expectation stated
+*before* the result. That asymmetry is the whole practice.
+Predicting what a check will say costs a sentence, and it is the only thing here that has ever
+caught an error in the checking itself.
+
 **Plan claims are hypotheses until executed.** `plans/*.md` records reasoning, not guarantees. Two
 plausible, load-bearing claims were wrong: "R2 → MinIO, R2's API is S3-compatible" conflated R2's
 *S3 endpoint* with the *binding*, which MinIO cannot serve; "local inference is zero code changes"
