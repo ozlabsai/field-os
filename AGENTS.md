@@ -245,10 +245,24 @@ baseline applied to a capability sweep, and it is the cheapest form of it: one k
 nothing and validates the other fourteen. A result that does not vary with the input is a broken
 instrument, not a finding.
 
-**Grep is not a search.** A character class missing `_` hid two services and produced a confident
-false alarm; a name-based dead-code scan false-positived because `agent.ts` contains `export class`
-declarations *inside a prompt template literal*. Resolve imports rather than matching names, and
-sanity-check a pattern before trusting a negative result.
+**Grep is not a search, and the scope is as wrong as the pattern.** A character class missing `_`
+hid two services and produced a confident false alarm; a name-based dead-code scan false-positived
+because `agent.ts` contains `export class` declarations *inside a prompt template literal*. Resolve
+imports rather than matching names, and sanity-check a pattern before trusting a negative result.
+
+The pattern is the half people check. **The scope is the half that keeps biting**, and it is the
+same defect wearing different clothes: a `grep -c … | head -1` over a two-file glob reported 0 for a
+probe that was there in the second file; a `preloadRoute` search ran over the wrong package; and a
+section was counted with `sed -n '121,240p'` — a *guessed line window* — which truncated it and gave
+a count two short. Each command was correct and each answer was confident and wrong. Bound a range
+by markers that exist in the file (`awk '/^## Heading/,/^---$/'`) rather than by line numbers you
+guessed, and state which paths you searched when you report a negative.
+
+Both of the last two were then **explained away rather than investigated** — "CI was quick", "the
+two you are counting are on another branch". Plausible, unfalsified, and about discrepancies that
+did not exist. When a count disagrees with someone else's, re-derive it with a bounded command
+before reaching for a story that reconciles them; the story arrives faster than the check and is
+much worse.
 
 **Derive, never restate.** When the same fact must exist in two places, compute the second from the
 first. Two people reached for this independently in one week without any guidance saying to:
