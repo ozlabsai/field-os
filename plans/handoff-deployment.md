@@ -13,8 +13,24 @@ learned, what is unverified, and what to do next.
 ## Where things stand
 
 **FieldOS is live at https://os.ozlabs.ai**, on GKE, with TLS, behind a shared-secret gate. A git
-tag now builds, tests, pushes **and deploys** — the cluster-reachability block is fixed by an
-in-cluster runner (`deploy/ci-runner/`, PR #128, 2026-08-22). Every row
+tag builds, tests, pushes **and deploys** — the cluster-reachability block is fixed by an in-cluster
+runner (`deploy/ci-runner/`, PR #128). Four releases have gone out that way
+(`alpha.7`–`alpha.10`, 2026-08-22/23).
+
+**As of `v0.1.0-alpha.10` the product works end to end**, including the thing that was never
+exercised until a real user tried it: a gadget can hold a subscription and receive live updates.
+Verified against the running deployment, 16/16, with every check baselined to fail against the
+previous release first:
+
+| | |
+|---|---|
+| deployment health, through the public edge | 9/9 |
+| the OZL-134 backend fix, in the running bundle | 3/3 |
+| the OZL-134 prompt fix, in the agent's own system prompt | 4/4 |
+
+The last row is the one that closes it: `gadget.subscribe(new Callback())` — the broken shape the
+agent was being taught — returns **0** occurrences in the deployed bundle, where it returned 1 on
+`alpha.9`. Every row
 below was verified by execution, not inference:
 
 | | |
@@ -88,9 +104,17 @@ and the `keys.json` guard.
 0. ~~**Give the deploy job a runner inside the VPC.**~~ **Done 2026-08-22**, PR #128 —
    `deploy/ci-runner/`. A pod in the cluster bypasses Master Authorized Networks entirely.
 
-1. **Use the product.** The largest gap by far. Signup and the RPC transport are browser-verified;
-   *building a gadget*, the walkthrough, and a real workspace are not. This is the difference
-   between "the deployment works" and "the software is worth deploying", and it needs a human.
+1. ~~**Use the product.**~~ **Done 2026-08-22**, and it was worth every minute. One hour of real use
+   found four bugs that a full day of infrastructure verification had not: a model picker that
+   swallowed messages silently, a Context Library invisible until opted into, a blank gadget pane,
+   and OZL-134 — every gadget subscription silently dead, with the agent reporting the feature as
+   working. Three were fixed and deployed the same night; the fourth was the prompt teaching the one
+   callback shape that cannot cross a gadget's isolate boundary.
+
+   The lesson is not "test more". It is that **the deployment working and the software working are
+   different claims needing different evidence**, and only one of them can be gathered without a
+   person. Every verification in this file passed throughout, correctly, while the product was
+   unusable.
 2. **Click the admin panel** (`/admin` as `guy`). #123's "AI model providers" section is confirmed
    present in the running container — both the panel bundle and the server-side enforcement — but
    the toggle itself is unexercised. Server-side enforcement is what actually governs, so the risk
