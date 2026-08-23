@@ -158,3 +158,26 @@ and identical visual weight, which is a weaker version of the exact bug the pane
    rather than a finding.
 3. **#154** — the agent asserted a specific threshold for a document it could not read. Worth
    deciding whether "I cannot see that document" should be required.
+
+## Shipped as `v0.1.0-alpha.11`
+
+Deployed 2026-08-23 by the tag pipeline; `os.ozlabs.ai` now runs `alpha.11`. Verified rather than
+assumed:
+
+| | |
+|---|---|
+| pod actually replaced | new UID `0bccf1fd` (was `e7a363b2`), image `0.1.0-alpha.11`, 0 restarts |
+| data survived | `keys.json` byte-identical at 1967, all 24 DO directories intact |
+| bundle contents | **8/8**, each row baselined to fail against `alpha.10` first |
+| composer focus ring, in a browser | `no ring → RING → no ring` |
+| `--color-kumo-brand` in the browser | `oklch(44% .075 152)` |
+
+**Two checks were wrong before they were right**, and both are now rules in `AGENTS.md`. A grep for
+`oklch(0.44 0.075 152)` returned 0 because the bundler minifies it to `oklch(44% .075 152)` — and
+the pre-deploy baseline had shown that row failing, which was read as proof it discriminates when it
+was really a check that could never pass. And the browser check reported the focus ring "does not
+change on focus" while printing a value that contained the ring, because the composer autofocuses on
+load so "before" already had it.
+
+Both were caught the same way as everything else this session: a result that disagreed with a stated
+expectation, checked rather than explained.
