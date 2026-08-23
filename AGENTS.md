@@ -253,9 +253,10 @@ imports rather than matching names, and sanity-check a pattern before trusting a
 The pattern is the half people check. **The scope is the half that keeps biting**, and it is the
 same defect wearing different clothes: a `grep -c … | head -1` over a two-file glob reported 0 for a
 probe that was there in the second file; a `preloadRoute` search ran over the wrong package; and a
-section was counted with `sed -n '121,240p'` — a *guessed line window* — which truncated it and gave
-a count two short. Each command was correct and each answer was confident and wrong. Bound a range
-by markers that exist in the file (`awk '/^## Heading/,/^---$/'`) rather than by line numbers you
+section was counted with a *guessed line window* (`sed -n '121,240p'`) which truncated it and
+undercounted — reproduced afterwards rather than restated: marker-bounded `awk` returns 10 where the
+guessed window returns 9. Each command was correct and each answer was confident and wrong. Bound a
+range by markers that exist in the file (`awk '/^## Heading/,/^---$/'`) rather than by line numbers you
 guessed, and state which paths you searched when you report a negative.
 
 Both of the last two were then **explained away rather than investigated** — "CI was quick", "the
