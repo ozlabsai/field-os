@@ -81,29 +81,39 @@ the rule or pattern-matching on the word "escalated".
 
 ## Build a gadget
 
-This is the part with the most unknowns, and the honest summary is: **the agent generates working
-code, and anything needing live updates is currently broken.**
+This is the part with the most unknowns, and the honest summary is: **the agent reliably generates
+substantial code, and whether that code renders is the open question.** No gadget has yet been built
+successfully on the first attempt — five tries, five needing help.
 
 **verified to generate** — an agent run completes and produces substantial code:
 
 > build a website for scheduling shifts
 
 Four agent runs, all successful, ~39KB of code. Whether the result *renders* was not established in
-the same session, because it hit the bug below.
+the same session, because it hit the subscription bug below.
 
-**broken today — avoid, or expect it to fail silently:** anything where the UI updates in response
-to server-side changes. Multiplayer, live dashboards, "update as data changes", real-time anything.
+**the failure to expect** — the agent may build the UI as HTML served from a `fetch()` handler in
+`server.js` and leave `client.js` a stub, then report success
+([#151](https://github.com/ozlabsai/field-os/issues/151)). Nothing calls that handler, so the App
+tab renders blank. If you see a blank pane, open `client.js` first and check it actually builds DOM.
 
-`callback.dup()` is missing on the callback stub inside the gadget sandbox
-([#134](https://github.com/ozlabsai/field-os/issues/134)). The agent is *instructed* to call it
-(`agent.ts:425-441`) and does; it throws; the agent then "fixes" it with a fallback that silences
-the error and leaves the subscription dead. **The gadget will report the feature as working.** That
-is the dangerous part — you get a green tick next to something that cannot function.
+**fixed in `alpha.10`** — subscriptions work. What was broken was never `dup()` itself but the
+*shape of the callback* the agent was being taught to pass
+([#134](https://github.com/ozlabsai/field-os/issues/134),
+[#145](https://github.com/ozlabsai/field-os/pull/145)). A **bare function** crosses the gadget's
+isolate boundary as a live RPC stub with a working `dup()`; an **object** — including a
+`class Callback extends RpcTarget` with an `update()` method — is structurally cloned instead and
+arrives with its methods gone, so `dup()` throws and the subscription silently never delivers. The
+prompt now says so explicitly.
 
-Until that is fixed, prefer gadgets where the UI is driven by user interaction rather than by the
-server pushing updates.
+Note what the old symptom looked like, because it is the pattern to expect here: the agent hit the
+throw, "fixed" it with a fallback that swallowed the error, and **reported the feature as working**.
+A green tick next to something that cannot function is the failure mode to watch for.
 
-**untested** — smaller, self-contained gadgets that avoid subscriptions:
+**untested** — nobody has yet watched a gadget UI update live in a browser. The mechanism is proven
+in the workerd parity suite and proven present in production; that is two claims, not the third.
+
+**untested** — smaller, self-contained gadgets:
 
 > a form that records a site visit and shows the running total per site
 
