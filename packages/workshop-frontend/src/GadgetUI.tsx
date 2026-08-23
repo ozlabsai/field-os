@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Text, Loader, Banner } from '@cloudflare/kumo'
-import { Sparkle } from '@phosphor-icons/react'
+import { Sparkle, Warning } from '@phosphor-icons/react'
 import { RpcStub, RpcTarget, newMessagePortRpcSession } from 'capnweb'
 import { GadgetClient, ConsoleLogEvent } from '@gadgets/workshop-shared/api'
 
@@ -161,21 +161,41 @@ const UI_BUNDLE_LOAD_TIMEOUT_MS = 20_000
 const RECONNECT_TIMEOUT_MS = 5_000
 
 // The pane shown when there is nothing to look at. Shared by the two states that reach it -- no
-// client.js at all, and a client.js that rendered nothing -- because they differ only in wording and
-// a near-duplicate block beside the original would leave the next reader diffing two panels.
-function EmptyUiPanel({ heading, detail }: { heading: string; detail: string }) {
+// client.js at all, and a client.js that rendered nothing -- because a near-duplicate block beside
+// the original would leave the next reader diffing two panels.
+//
+// `tone` is not decoration. These two states must be distinguishable at a glance, not only by
+// reading them: "waiting" is a hopeful state the agent will resolve, while "the gadget renders
+// nothing" is a defect the user has to act on. Giving both the same sparkle and accent glow made a
+// broken gadget look like a pending one, which is the same silent-failure shape this pane exists to
+// break -- and a sparkle on an error is the AI-chat idiom PRODUCT.md names as an anti-reference.
+function EmptyUiPanel(
+  { heading, detail, tone = 'waiting' }:
+  { heading: string; detail: string; tone?: 'waiting' | 'problem' },
+) {
+  const isProblem = tone === 'problem'
   return (
     <>
-      <div
-        className="themed-accent-glow absolute left-1/2 top-1/2 h-80 w-80 -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
-        style={{
-          filter: 'blur(18px)',
-        }}
-      />
+      {!isProblem && (
+        <div
+          className="themed-accent-glow absolute left-1/2 top-1/2 h-80 w-80 -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+          style={{
+            filter: 'blur(18px)',
+          }}
+        />
+      )}
 
       <div className="relative flex max-w-sm flex-col items-center gap-3 px-6 text-center">
-        <div className="themed-user-bubble-shadow flex h-12 w-12 items-center justify-center rounded-xl border border-kumo-line bg-kumo-elevated text-kumo-subtle">
-          <Sparkle size={22} weight="regular" />
+        <div
+          className={
+            isProblem
+              ? 'flex h-12 w-12 items-center justify-center rounded-xl border border-kumo-warning bg-kumo-warning-tint text-kumo-warning'
+              : 'themed-user-bubble-shadow flex h-12 w-12 items-center justify-center rounded-xl border border-kumo-line bg-kumo-elevated text-kumo-subtle'
+          }
+        >
+          {isProblem
+            ? <Warning size={22} weight="regular" />
+            : <Sparkle size={22} weight="regular" />}
         </div>
         <div className="space-y-1">
           <h2 className="text-[20px] leading-7 font-normal tracking-[-0.45px] text-kumo-default">
@@ -568,6 +588,7 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
           style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}
         >
           <EmptyUiPanel
+            tone="problem"
             heading="client.js exports no UI"
             detail={
               'This gadget\u2019s client.js ran without rendering anything. If the interface was ' +
