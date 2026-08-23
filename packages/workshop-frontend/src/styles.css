@@ -234,19 +234,6 @@ code {
   font-family: var(--font-mono);
 }
 
-/* Prompt input focus */
-.prompt-input {
-  border-color: var(--color-kumo-line);
-  background: var(--color-kumo-base);
-  box-shadow: var(--shadow-stack);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.prompt-input:focus-within {
-  border-color: var(--color-kumo-brand);
-  box-shadow: var(--shadow-stack), 0 0 0 3px var(--color-selection-bg);
-}
-
 /* Template card hover */
 .template-card {
   transition: transform 0.2s var(--ease-out),
@@ -306,11 +293,25 @@ html {
     0 10px 28px -16px rgba(20, 17, 16, 0.12);
 }
 
+/* The composer is the product's primary input and the only control with no keyboard focus
+   indicator: its textarea carries `outline-none` and nothing in its ancestor chain replaced it.
+   Deepening the ambient shadow, which is all this rule used to do, is an elevation cue rather than
+   a focus cue -- measured as no computed change a keyboard user could act on. Add a real ring.
+   `:has(:focus-visible)` keeps it keyboard-only, matching how every other control here behaves. */
 .themed-prompt-card-shadow:focus-within {
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, var(--color-kumo-fill) 85%, transparent),
     0 1px 2px rgba(20, 17, 16, 0.04),
     0 14px 34px -14px rgba(20, 17, 16, 0.16);
+}
+
+.themed-prompt-card-shadow:has(:focus-visible) {
+  border-color: var(--color-kumo-brand);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--color-kumo-fill) 85%, transparent),
+    0 1px 2px rgba(20, 17, 16, 0.04),
+    0 14px 34px -14px rgba(20, 17, 16, 0.16),
+    0 0 0 3px var(--color-selection-bg);
 }
 
 .themed-user-bubble-shadow {
