@@ -300,6 +300,20 @@ caller identification survived a wrong mechanism, a sound bundle measurement sur
 conclusion drawn from it, and a good prompt rewrite survived the too-broad scope that prompted it.
 Every time, the surviving half was the one that had not been attached to the other.
 
+Two things about *which* claims a second reader actually checks, both learned the same evening. The
+separation has to reach **the most senior claim in the exchange**, or it produces deference rather
+than review: a manufactured explanation for a discrepancy — plausible, offered by the person doing
+the reviewing — survived until someone re-derived the number it was explaining. And it has to reach
+the most **comfortable** claim, which is the harder axis: a single sentence of praise compressed
+three sessions and two days into one wrong attribution — crediting the wrong session with a catch,
+naming a PR that had merged rather than been stopped — and went unexamined for a full exchange,
+because a flattering claim gives nobody a motive to check it. Neither party is positioned to: the
+author has no reason to doubt something generous, and the recipient has every reason not to. The
+correction *to that correction* then overclaimed in turn, calling a fix landed when it was still
+unmerged, which is the same pull running one level down. Senior and comfortable are different axes,
+and the second is the one nothing else in this file catches — a senior claim at least attracts
+scrutiny from being senior, while a flattering one actively suppresses it.
+
 **An intervention that can be inert must report whether it fired.** A hook, probe, blocker or
 filter that silently does nothing yields a null result indistinguishable from a real refutation,
 and the silence reads as evidence. Four instances in one debugging session: a `console.error` hook
