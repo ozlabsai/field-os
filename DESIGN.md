@@ -79,3 +79,24 @@ Ease out; no bounce, no elastic. Do not animate layout properties. Existing tran
 
 These are recorded as *defects* rather than preferences because two of the three are measurable
 against a standard, and the third is an internal contradiction in the file.
+
+## How the contrast numbers here were derived
+
+Stated so they can be re-derived rather than trusted. A ratio without its inputs is the same defect
+as a count without its scope.
+
+- **Formula:** WCAG 2.x relative luminance — sRGB channels linearised (`c/12.92` below 0.04045, else
+  `((c+0.055)/1.055)^2.4`), weighted `0.2126 R + 0.7152 G + 0.0722 B`, then
+  `(L_lighter + 0.05) / (L_darker + 0.05)`. OKLCH values were converted to sRGB first.
+- **Which pair, for each claim:**
+  - *Button figures* — `#ffffff` text against `--color-kumo-brand` / `--color-kumo-brand-hover`, per
+    theme. That is the real pairing: every primary CTA in the codebase sets `text-white`.
+  - *Selected text* — `--color-selection-text` against `--color-selection-bg`.
+  - *Warning icon in the gadget empty state* — `--text-color-kumo-warning` against
+    `--color-kumo-warning-tint`, judged against the **3:1** non-text bar rather than 4.5:1, because
+    it is an icon.
+- **Thresholds:** 4.5:1 for text (AA normal), 3:1 for non-text/icons. Large-text 3:1 was not claimed
+  anywhere here.
+- **What was not measured:** neutral body text on neutral surfaces, and the status colors
+  (`info` / `danger` / `success`). Both were inherited unchanged and are outside the scope of the
+  brand migration — absence of a number here is not a pass.
