@@ -102,6 +102,34 @@ airgapped install and a dead end here (see #98/#99).
 **`f.content()` on a live iframe returns the executed DOM, not the `srcdoc`.** To recover a gadget's
 source, read the `srcdoc` attribute from the *host* side and decode the data URL.
 
+## The UI pass that followed
+
+A separate `/impeccable` review of `workshop-frontend` (#155) found three more defects, all of the
+same family and all measured rather than argued:
+
+- **The brand migration was half-finished.** Light mode's primary button was green with an orange
+  hover — a **137° hue swap** at the moment of interaction, landing at **4.30:1** against white text,
+  under the AA floor. Dark mode had never been migrated off Cloudflare orange at all. Selected text
+  was **2.81:1**. The file's own comment claimed the accent was orange while the token beneath it was
+  green.
+- **The composer had no keyboard focus indicator.** The product's primary input. Its `outline-none`
+  was never replaced, and `.prompt-input` — CSS that sets exactly the right border and ring — is
+  applied to **no element anywhere**. Someone wrote the fix and never wired it up.
+- **Adding an unreachable model reports success.** The API URL field pre-filled
+  `http://localhost:11434`, `addModel` never contacts the endpoint, and the result is a green
+  "added successfully" toast plus a listed, selectable model that cannot work (#156). It is the
+  first thing a new user does.
+
+Two of those were caught only by *rendering* rather than reading: the pale orange
+`--color-selection-bg` turned out to double as the composer's focus ring, so focusing the main input
+drew a green border inside a pink halo, and nothing in the token name says so.
+
+**Two self-corrections worth repeating**, both caught by a control rather than by noticing something
+looked wrong. A first probe reported "no focus rings anywhere" — that was `.click()` setting
+`:focus` without `:focus-visible`; the app is correctly keyboard-gated and 14/14 tab stops paint an
+indicator. And a review of *this session's own* empty states failed them: they had different words
+and identical visual weight, which is a weaker version of the exact bug the pane was built to break.
+
 ## What to do next
 
 1. **Build more gadgets.** The rate has not converged — one platform bug appeared twice in four, and
