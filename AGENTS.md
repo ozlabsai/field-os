@@ -222,7 +222,14 @@ innocent explanation**, so the anomaly gets absorbed instead of investigated, an
 proceeds on a green that was never measured. Key a wait on the *content* — `--json bucket --jq
 '.[] | select(.bucket=="pending")'` and wait for empty — not on the exit status, and confirm the run
 you are waiting on is the one built from your HEAD sha rather than a superseded run of the same
-branch.
+branch. That second half is an independent way to wait on the wrong thing, and it fails in the same
+direction: a green reported about a build that is not yours.
+
+The failure survives knowing about it. While this rule was being written, one of the already-doomed
+waiters fired a completion notification against a superseded build — ten minutes after its own
+lesson had been learned, and it still arrived looking exactly like an answer. That is the argument
+for these living in a file rather than in someone's memory: in the moment, nothing prompts you to
+doubt a notification that says "completed".
 
 **A capability sweep needs one row whose answer you already know.** Five sandbox probes were run
 across three iframe `sandbox` variants to find which browser capabilities fail silently. All
