@@ -11,6 +11,12 @@ import CAPNWEB_BUNDLE from 'capnweb?raw'
 
 let CAPNWEB_BUNDLE_ANNOTATED = `//# sourceURL=jsrpc.js\n${CAPNWEB_BUNDLE}`
 
+// How long a gadget's client.js may run without touching the DOM before we conclude it renders no
+// UI. Not a performance budget: a gadget that renders after an RPC round trip is normal and must not
+// be reported, so this only has to outlast a slow first paint. Cancelled by the first mutation, so
+// the cost on a healthy gadget is one disconnected observer.
+const EMPTY_UI_REPORT_DELAY_MS = 4_000
+
 // Unfortunately, we will have to embed the code as a data: URL, because our iframe is totally
 // sandboxed. Even more unfortunately, since it's a module which we need to import from, we can't
 // use the data URL as a <script> tag's source. Instead, we have to use it in an import statement.
@@ -98,6 +104,31 @@ window.addEventListener('unhandledrejection', (event) => {
   }, '*');
 });
 
+// Report whether client.js ever rendered anything. A client.js that runs cleanly but paints nothing
+// is indistinguishable from a broken one -- the iframe is a bare <html><body>, so it shows as a
+// white pane on a dark host with no error anywhere (#151). Only code inside this document can tell
+// the difference, so answer the question here and let the host decide what to say.
+//
+// Deadline-based, not immediate: rendering after an awaited gadget RPC call is the documented shape
+// and is what the agent prompt's own example does, so a synchronous check would fire on healthy
+// gadgets. Any mutation cancels the report -- this detects "nothing happened", never "I dislike
+// what happened".
+{
+  let reported = false;
+  let timer = setTimeout(() => {
+    reported = true;
+    window.parent.postMessage({ type: 'empty-ui', empty: true }, '*');
+  }, ${EMPTY_UI_REPORT_DELAY_MS});
+  // Stays connected after the deadline: a gadget that paints late must be able to withdraw the
+  // report, so the notice disappears by itself instead of outliving the problem it describes.
+  let observer = new MutationObserver(() => {
+    clearTimeout(timer);
+    observer.disconnect();
+    if (reported) window.parent.postMessage({ type: 'empty-ui', empty: false }, '*');
+  });
+  observer.observe(document.body, {childList: true, subtree: true, attributes: true, characterData: true});
+}
+
 `);
 
 const createSandboxedHtml = (jsCode: string): string => {
@@ -129,6 +160,36 @@ interface GadgetUIProps {
 const UI_BUNDLE_LOAD_TIMEOUT_MS = 20_000
 const RECONNECT_TIMEOUT_MS = 5_000
 
+// The pane shown when there is nothing to look at. Shared by the two states that reach it -- no
+// client.js at all, and a client.js that rendered nothing -- because they differ only in wording and
+// a near-duplicate block beside the original would leave the next reader diffing two panels.
+function EmptyUiPanel({ heading, detail }: { heading: string; detail: string }) {
+  return (
+    <>
+      <div
+        className="themed-accent-glow absolute left-1/2 top-1/2 h-80 w-80 -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+        style={{
+          filter: 'blur(18px)',
+        }}
+      />
+
+      <div className="relative flex max-w-sm flex-col items-center gap-3 px-6 text-center">
+        <div className="themed-user-bubble-shadow flex h-12 w-12 items-center justify-center rounded-xl border border-kumo-line bg-kumo-elevated text-kumo-subtle">
+          <Sparkle size={22} weight="regular" />
+        </div>
+        <div className="space-y-1">
+          <h2 className="text-[20px] leading-7 font-normal tracking-[-0.45px] text-kumo-default">
+            {heading}
+          </h2>
+          <p className="text-[15px] leading-5 font-normal tracking-[-0.3px] text-kumo-subtle">
+            {detail}
+          </p>
+        </div>
+      </div>
+    </>
+  )
+}
+
 export default function GadgetUI(props: GadgetUIProps) {
   return <GadgetUISession key={props.chatId} {...props} />
 }
@@ -140,6 +201,9 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
   const [hasLoaded, setHasLoaded] = useState(false)
   const [isInvalidated, setIsInvalidated] = useState(false)
   const [iframeGeneration, setIframeGeneration] = useState(0)
+  // Set when the gadget's client.js ran without ever touching the DOM (reported from inside the
+  // iframe). Distinct from `!sandboxedHtml`, which means there is no client.js at all.
+  const [renderedNothing, setRenderedNothing] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const prevReloadTriggerRef = useRef(reloadTrigger)
   // Identifies the newest bundle load, so an older one can't write state after being superseded.
@@ -198,6 +262,8 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
 
   const reloadIframe = (reason: unknown) => {
     resetConnection(reason)
+    // A new document re-runs client.js, so the previous verdict no longer describes what is mounted.
+    setRenderedNothing(false)
     setIframeGeneration(generation => generation + 1)
   }
 
@@ -287,6 +353,8 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
       try {
         setLoading(true)
         setError(null)
+        // The incoming bundle has not been judged yet; keep a previous verdict from describing it.
+        setRenderedNothing(false)
 
         const bundle = await gadget.getUiBundle(chatId)
         if (!isCurrent()) return
@@ -382,6 +450,8 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
         })
       } else if (event.data?.type === 'escape') {
         onIframeEscapeRef.current?.()
+      } else if (event.data?.type === 'empty-ui') {
+        setRenderedNothing(event.data.empty === true)
       }
     }
 
@@ -450,6 +520,8 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
     )
   }
 
+  // No client.js at all. Distinct from a client.js that rendered nothing (handled below over the
+  // live iframe): here there is nothing to wait on but the agent, so "it will appear here" is true.
   if (!sandboxedHtml) {
     return (
       <div
@@ -461,32 +533,18 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
           alignItems: 'center',
         }}
       >
-        <div
-          className="themed-accent-glow absolute left-1/2 top-1/2 h-80 w-80 -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
-          style={{
-            filter: 'blur(18px)',
-          }}
+        <EmptyUiPanel
+          heading="No gadget UI yet"
+          detail="When the gadget builds one, it will appear here."
         />
-
-        <div className="relative flex max-w-sm flex-col items-center gap-3 px-6 text-center">
-          <div className="themed-user-bubble-shadow flex h-12 w-12 items-center justify-center rounded-xl border border-kumo-line bg-kumo-elevated text-kumo-subtle">
-            <Sparkle size={22} weight="regular" />
-          </div>
-          <div className="space-y-1">
-            <h2 className="text-[20px] leading-7 font-normal tracking-[-0.45px] text-kumo-default">
-              No gadget UI yet
-            </h2>
-            <p className="text-[15px] leading-5 font-normal tracking-[-0.3px] text-kumo-subtle">
-              When the gadget builds one, it will appear here.
-            </p>
-          </div>
-        </div>
       </div>
     )
   }
 
+  // The iframe stays mounted underneath any notice: a gadget that paints late withdraws its own
+  // report, and one that threw keeps the console stack that explains it.
   return (
-    <div style={{ height, width: '100%' }}>
+    <div style={{ height, width: '100%', position: 'relative' }}>
       <iframe
         key={`${reloadTrigger}:${iframeGeneration}`}
         ref={iframeRef}
@@ -500,6 +558,22 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         title="Gadget UI"
       />
+      {renderedNothing && (
+        <div
+          className="absolute inset-0 overflow-hidden bg-kumo-base"
+          style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}
+        >
+          <EmptyUiPanel
+            heading="client.js exports no UI"
+            detail={
+              'This gadget\u2019s client.js ran without rendering anything. If the interface was ' +
+              'built as HTML served from server.js it will never appear here \u2014 the App tab runs ' +
+              'client.js, and nothing calls the gadget\u2019s fetch handler. Ask the agent to build ' +
+              'the UI in client.js.'
+            }
+          />
+        </div>
+      )}
     </div>
   )
 }

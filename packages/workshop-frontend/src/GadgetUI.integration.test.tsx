@@ -487,4 +487,86 @@ describe('GadgetUI RPC recovery', () => {
     const reloadedChild = connectIframe(container.querySelector('iframe')!)
     await expect(reloadedChild.read()).resolves.toBe('reloaded')
   })
+
+  // #151: the agent wrote the UI as HTML served from server.js and left client.js as comments. The
+  // file exists, so getUiBundle returns a bundle and the iframe mounts -- it just paints nothing.
+  // Only the iframe can see that, so it reports `empty-ui`; these cover what the host does with it.
+  function reportEmptyUi(iframe: HTMLIFrameElement) {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'empty-ui', empty: true },
+      origin: 'null',
+      source: iframe.contentWindow,
+    }))
+  }
+
+  it('says client.js exports no UI when the bundle renders nothing', async () => {
+    // The real #151 client.js: comments only, so it runs cleanly and never touches the DOM.
+    const gadget = fakeGadget('scheduler', '// UI is embedded in server.js\n')
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
+    })
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+
+    await act(async () => reportEmptyUi(container.querySelector('iframe')!))
+
+    // Without the fix the pane is blank and says nothing at all.
+    expect(container.textContent).toContain('client.js exports no UI')
+    // The iframe stays mounted deliberately, so a late paint can withdraw the report (see below).
+    expect(container.querySelector('iframe')).not.toBeNull()
+    // It must not claim a UI is still on its way -- that is the other state, and the wrong advice.
+    expect(container.textContent).not.toContain('No gadget UI yet')
+  })
+
+  it('keeps the two empty states distinct', async () => {
+    const gadget = fakeGadget('none', 'unused')
+    gadget.getUiBundle.mockResolvedValue(null as unknown as UiBundle)
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
+    })
+    await vi.waitFor(() => expect(container.textContent).toContain('No gadget UI yet'))
+    expect(container.textContent).not.toContain('client.js exports no UI')
+  })
+
+  it('ignores an empty-ui report from a stale iframe document', async () => {
+    const gadget = fakeGadget('live', 'document.body.textContent = "live"')
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" reloadTrigger={0} />)
+    })
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    const stale = container.querySelector('iframe')!
+
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" reloadTrigger={1} />)
+    })
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBe(stale))
+
+    // A verdict about the previous document must not condemn the one now mounted.
+    await act(async () => reportEmptyUi(stale))
+    expect(container.querySelector('iframe')).not.toBeNull()
+    expect(container.textContent).not.toContain('client.js exports no UI')
+  })
+
+  it('withdraws the notice when the gadget paints late', async () => {
+    // A slow first paint is legitimate. Verified in Chrome: a gadget rendering past the deadline is
+    // reported and then withdraws, so the notice must not be a one-way verdict.
+    const gadget = fakeGadget('slow', 'awaited render')
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
+    })
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    const iframe = container.querySelector('iframe')!
+
+    await act(async () => reportEmptyUi(iframe))
+    expect(container.textContent).toContain('client.js exports no UI')
+
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent('message', {
+        data: { type: 'empty-ui', empty: false },
+        origin: 'null',
+        source: iframe.contentWindow,
+      }))
+    })
+    expect(container.textContent).not.toContain('client.js exports no UI')
+    expect(container.querySelector('iframe')).toBe(iframe)
+  })
 })
