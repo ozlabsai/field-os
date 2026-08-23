@@ -255,9 +255,15 @@ same defect wearing different clothes: a `grep -c … | head -1` over a two-file
 probe that was there in the second file; a `preloadRoute` search ran over the wrong package; and a
 section was counted with a *guessed line window* (`sed -n '121,240p'`) which truncated it and
 undercounted — reproduced afterwards rather than restated: marker-bounded `awk` returns 10 where the
-guessed window returns 9. Each command was correct and each answer was confident and wrong. Bound a
-range by markers that exist in the file (`awk '/^## Heading/,/^---$/'`) rather than by line numbers you
-guessed, and state which paths you searched when you report a negative.
+guessed window returns 9. Each command was correct and each answer was confident and wrong.
+
+A line-numbered window is worse than wrong once: **it goes stale silently.** That window began at
+line 121, which is exactly where `## Verification posture` sat on `main` the day it was written — so
+it was correct when derived, and every edit above it since has moved the target with nothing to
+indicate it — and the session that wrote it reports the same command returning a different wrong
+count hours earlier, which is the failure this predicts. Bound a range by markers that exist in the
+file (`awk '/^## Heading/,/^---$/'`) rather than by line numbers you guessed, and state which paths
+you searched when you report a negative.
 
 Both of the last two were then **explained away rather than investigated** — "CI was quick", "the
 two you are counting are on another branch". Plausible, unfalsified, and about discrepancies that
