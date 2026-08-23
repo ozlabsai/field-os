@@ -80,5 +80,24 @@ source, read the `srcdoc` attribute from the *host* side and decode the data URL
 2. **Watch for the next interaction-layer bug.** Rendering is no longer where gadgets fail; the two
    platform bugs this session were both *after* a correct render. Anything the sandbox attribute
    withholds is a candidate — the same class as `allow-forms`.
+
+   The flags worth thinking about, as **hypotheses, not measurements** (see the failed attempt
+   below): `allow-downloads` is the obvious next one — a gadget offering "export as CSV" via
+   `<a download>` is a plausible ask and would fail the same silent way. `allow-modals` is
+   *deliberately* withheld and documented in the prompt; leave it. `allow-same-origin` must stay off
+   or the opaque-origin isolation the design rests on collapses.
+
+   **A harness for this was attempted and failed, which is worth more than the flags list.** Five
+   capability probes were run under three sandbox variants to see which fail silently. Every one of
+   the fifteen rows came back **identical across all three variants** — including the form-submit
+   row, which is *known* to differ, having been measured cleanly elsewhere. So the harness was not
+   exercising the sandbox at all and every row was junk.
+
+   The only reason that was caught: one row had a **predicted** result that could be checked, and
+   the prediction failed. Run with a single variant — as the first version was — those same five
+   rows read as entirely plausible findings ("downloads fail silently, clipboard is blocked") and
+   would have been reported. Whoever builds this next should include at least one probe whose answer
+   is already known, and treat a result that never varies with the input as a broken instrument
+   rather than a finding.
 3. **#154** — the agent asserted a specific threshold for a document it could not read. Worth
    deciding whether "I cannot see that document" should be required.
