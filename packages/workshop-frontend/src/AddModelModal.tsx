@@ -174,7 +174,11 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
     }
     setApiToken('')
     setAccountId('')
-    setApiUrl(sel.provider === 'ollama' ? 'http://localhost:11434' : '')
+    // Deliberately not pre-filled. localhost:11434 is a reasonable *hint* and a bad *default*: a
+    // pre-filled field is a form that already looks complete, so the natural action is to submit
+    // it, and addModel never contacts the endpoint -- an unreachable address is stored and reported
+    // as "added successfully" (#156). The placeholder still shows the shape of the answer.
+    setApiUrl('')
   }
 
   const validate = (): boolean => {

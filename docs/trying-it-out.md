@@ -19,7 +19,7 @@ system reported success for something that had not happened. Treat "untested" as
 Three things have to be true, and none of them is automatic. If a deployment feels dead, it is
 almost always one of these.
 
-**1. A model must be configured.** Settings → AI models. Paste the **base URL** of your
+**1. A model must be configured.** Go to **/providers** ("AI providers" → *Add provider*). Paste the **base URL** of your
 OpenAI-compatible server, not the full endpoint — though the normalizer now handles
 `.../v1/chat/completions` if you paste it from a vendor's docs.
 
