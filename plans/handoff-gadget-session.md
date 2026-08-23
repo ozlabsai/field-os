@@ -13,9 +13,15 @@ exactly this: *build three or four real gadgets end to end and fix what breaks.*
 | 2 | site visit logger | yes | 1 — platform, `allow-forms` |
 | 3 | shared tally counter (live updates) | yes | **0** |
 | 4 | field engineer checklist | yes | 1 — platform, `allow-forms` (same bug) |
+| 5 | visit duration log + CSV export | yes | 1 — CSV export silently does nothing (**undiagnosed**, below) |
 
-Two distinct defects, one of them hit twice. Kept split by owner, as the previous session asked:
-**platform bugs 1** (`allow-forms`, 2 occurrences), **agent-code bugs 1**.
+Kept split by owner, as the previous session asked: **platform bugs 1 confirmed**
+(`allow-forms`, 2 occurrences) **+ 1 undiagnosed** (CSV export), **agent-code bugs 1**.
+
+**The `<form>` choice is not universal, which qualifies the `allow-forms` count.** Gadget 5 wired a
+plain click handler instead and its adds worked. So it is 2 of 5 affected, not a certainty — the
+agent's structural choice varies per gadget, which is worth knowing before predicting blast radius
+from a sample.
 
 **The target from the previous handoff is met: gadget 1 built and rendered correctly on the first
 attempt with no human intervention.** That had never happened — five previous attempts, five needing
@@ -39,6 +45,29 @@ Fixed in #153. Verified in Chrome with both halves measured: under the old attri
 handler **never fires at all** — the browser blocks the submission before any script runs, so
 `preventDefault()` cannot happen. Adding `allow-forms` does not let a form reach the network; the
 CSP's `form-action 'none'` and `connect-src 'none'` are the controls doing that work.
+
+## The undiagnosed one: CSV export
+
+Gadget 5 renders, adds work, and **"Export as CSV" produces no download and no console output at
+all.** The extracted code is the ordinary shape — `new Blob([csv])` → `URL.createObjectURL` →
+`<a download>` → `.click()`.
+
+**Deliberately not filed as an `allow-downloads` bug, because that is not established.** At least
+two mechanisms fit and this session could not separate them:
+
+1. the sandbox lacks `allow-downloads`; or
+2. the CSP is `default-src 'none'` with **no `blob:` in any directive**, so the object URL may be
+   dead regardless of any sandbox flag.
+
+Those imply different fixes. A harness to discriminate them was written and **failed the same way
+the earlier one did** — its control row (a form handler that *must* fire, independently measured as
+firing) returned `NO REPORT` in both variants, so all four rows were junk. Had the control been
+omitted, "download: no report in both" would have read as *confirmation* of the `allow-downloads`
+hypothesis: a satisfying, wrong result. Second time in one session that the control was the only
+thing standing between a plausible story and a false finding.
+
+So: **an observation without a mechanism.** Next session should test `blob:` reachability under the
+current CSP first, since that is the cheaper of the two to rule out.
 
 ## Three claims that were previously untested, now measured
 
