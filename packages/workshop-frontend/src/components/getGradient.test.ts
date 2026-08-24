@@ -19,4 +19,18 @@ describe('getGradient', () => {
   it('is stable for a given id', () => {
     expect(getGradient('format.slides')).toBe(getGradient('format.slides'))
   })
+
+  it('borrows no vendor brand colour and no inherited orange', () => {
+    // The old palette was literally Slack / Jira / Discord / Google / GitHub hexes -- the same
+    // values ConnectionLogos.tsx uses to identify those services -- plus an orange-to-red pair.
+    // Decoration must not look like a service badge, and orange is what this fork is migrating off.
+    const VENDOR = ['4a154b', '0052cc', '5865f2', '34a853', '4285f4', '24292e', 'e01e5a', 'ecb22e']
+    const ids = Array.from({ length: 40 }, (_, i) => `blueprint.sample-${i}`)
+    for (const g of new Set(ids.map(getGradient))) {
+      const lower = g.toLowerCase()
+      for (const v of VENDOR) expect(lower).not.toContain(v)
+      expect(lower).not.toContain('orange')
+      expect(lower).not.toContain('red-')
+    }
+  })
 })

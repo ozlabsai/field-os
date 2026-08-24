@@ -11,15 +11,23 @@ import {
 } from "@gadgets/workshop-shared/api";
 import { VendorDescription } from "@gadgets/workshop-shared/gatekeeper";
 
+// A blueprint's gradient is decoration, so it must not borrow meaning from somewhere else. The
+// previous set was literally vendor brand colours -- Slack purple, Jira blue, Discord, Google,
+// GitHub -- the same hexes ConnectionLogos.tsx uses to identify those actual services, which made
+// an unrelated blueprint look like a Slack or GitHub integration. And one of them was
+// orange-to-red, which is the Cloudflare inheritance this fork is migrating away from.
+//
+// These are eight hues fanned around the FieldOS brand green, each a single hue at two lightnesses
+// so the pair reads as one colour rather than a logo. No hue sits in the orange band.
 const gradients = [
-  "from-[#4A154B] to-[#7C3085]",
-  "from-[#0052CC] to-[#2684FF]",
-  "from-[#5865F2] to-[#7983F5]",
-  "from-[#34A853] to-[#4285F4]",
-  "from-[#24292e] to-[#555]",
-  "from-[#E01E5A] to-[#ECB22E]",
-  "from-orange-600 to-red-600",
-  "from-emerald-600 to-teal-600",
+  "from-[#2e6540] to-[#184829]",
+  "from-[#006758] to-[#00493d]",
+  "from-[#00656e] to-[#004850]",
+  "from-[#16607f] to-[#00435d]",
+  "from-[#3d5787] to-[#273c64]",
+  "from-[#594f83] to-[#3e3561]",
+  "from-[#4a612a] to-[#324415]",
+  "from-[#5f5a18] to-[#433f02]",
 ];
 
 export function getGradient(id: string) {
