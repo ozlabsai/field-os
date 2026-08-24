@@ -308,6 +308,14 @@ screenshot. **Ask which files could hold a second copy before concluding a value
 monorepo the answer is usually "every package that builds its own bundle", and
 `grep -rl <token> packages --include='*.css'` costs nothing.
 
+It recurred a third time the same day, in the form that is hardest to notice: a post-deploy check
+grepped `workspace._id-*.js` for six colour values and got **six zeros**, which read as a clean
+result. The values were in a lazily-loaded `BlueprintPreviewImage-*.js` chunk, so the check had been
+reading a file that could not contain them. **A sanity row would have caught it instantly** — "does
+this file contain *any* gradient class?" returns 0 against the wrong chunk and 6 against the right
+one — which is the cheapest possible guard and the one most often left out. Pair every "expect 0"
+assertion with an "expect >0" that proves the file was read.
+
 Both of the last two were then **explained away rather than investigated** — "CI was quick", "the
 two you are counting are on another branch". Plausible, unfalsified, and about discrepancies that
 did not exist. When a count disagrees with someone else's, re-derive it with a bounded command
