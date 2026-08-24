@@ -23,7 +23,21 @@ const gradients = [
 ];
 
 export function getGradient(id: string) {
-  return gradients[id.charCodeAt(0) % gradients.length];
+  // Hash the whole id, not just its first character. Blueprint ids are namespaced, so a
+  // one-byte hash collides by construction: every format blueprint this deployment ships
+  // ("format.document", "format.slides", "format.spreadsheet") starts with "f" and therefore
+  // drew the identical gradient, which is not a distinguishing mark at all.
+  // The final xor-shift matters: `gradients.length` is a power of two, so taking the low bits of a
+  // *31 polynomial keeps almost no entropy (31 == 7 mod 8), and ids differing only in the middle
+  // still collide. Folding the high bits down first fixes that.
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  }
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 0x2c1b3c6d) | 0;
+  hash ^= hash >>> 12;
+  return gradients[Math.abs(hash) % gradients.length];
 }
 
 export type BindingBadgeInfo = {
