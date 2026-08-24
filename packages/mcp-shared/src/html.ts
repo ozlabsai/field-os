@@ -34,7 +34,7 @@ export const PAGE_STYLE = `
     --text: #1c1a18;
     --strong: #100f0d;
     --subtle: oklch(52% 0.006 60);
-    --brand: #ff4801;
+    --brand: oklch(0.44 0.075 152);
     --danger: oklch(63.7% 0.237 25.331);
     /* Kumo's primary button is "contrast": near-black in light mode, the accent in dark. */
     --contrast: #14110f;
@@ -48,9 +48,9 @@ export const PAGE_STYLE = `
       --text: oklch(0.92 0.01 285);
       --strong: oklch(0.92 0.01 285);
       --subtle: oklch(0.66 0.02 285);
-      --brand: #b84e00;
+      --brand: oklch(0.52 0.085 152);
       --danger: oklch(70.4% 0.191 22.216);
-      --contrast: #b84e00;
+      --contrast: oklch(0.52 0.085 152);
     }
   }
 

@@ -297,6 +297,17 @@ ring*. The composer autofocuses on load, so "before" already had it and there wa
 compare. Blur first, then focus, then blur again: `no ring → RING → no ring` is the shape that
 discriminates. A before/after is only evidence when you have established what "before" actually is.
 
+The scope error recurred within hours of that rule being written, which is worth recording because
+it shows what "wrong scope" looks like when nothing about the command is suspicious. A sweep for
+inherited brand colors searched `workshop-frontend/src/styles.css` — the file where the tokens are
+defined — and reported the migration complete. It was not: `gatekeeper-context` and
+`gatekeeper-scheduler` are **separate Vite bundles with their own copies of the same tokens**, and
+`mcp-shared/html.ts` inlines a third copy for the OAuth consent pages. All three were still fully
+Cloudflare orange, one of them on a button failing contrast at 3.40:1, and a user found it in a
+screenshot. **Ask which files could hold a second copy before concluding a value is gone**; in a
+monorepo the answer is usually "every package that builds its own bundle", and
+`grep -rl <token> packages --include='*.css'` costs nothing.
+
 Both of the last two were then **explained away rather than investigated** — "CI was quick", "the
 two you are counting are on another branch". Plausible, unfalsified, and about discrepancies that
 did not exist. When a count disagrees with someone else's, re-derive it with a bounded command
