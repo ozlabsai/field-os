@@ -161,7 +161,7 @@ function BlueprintThumbnail({ blueprint }: { blueprint: BlueprintPublicInfo }) {
           loading="lazy"
         />
       ) : (
-        <BlueprintPreviewPlaceholder id={blueprint.id} />
+        <BlueprintPreviewPlaceholder id={blueprint.id} title={blueprint.metadata.title} />
       )}
     </div>
   );

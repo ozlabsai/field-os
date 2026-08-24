@@ -22,38 +22,44 @@ export function BlueprintPreviewImage({
           loading="lazy"
         />
       ) : (
-        <BlueprintPreviewPlaceholder id={blueprintId} />
+        <BlueprintPreviewPlaceholder id={blueprintId} title={title} />
       )}
     </div>
   )
 }
 
-export function BlueprintPreviewPlaceholder({ id }: { id: string }) {
+export function BlueprintPreviewPlaceholder({ id, title }: { id: string; title?: string }) {
+  // Deliberately not a mock document. This used to draw a header, a divider and five rows of four
+  // columns -- a fake spreadsheet, identical for every blueprint, which made three unrelated
+  // blueprints render as three identical grey documents and read as a loading skeleton that never
+  // resolves. On this fork it never does resolve: screenshots require the BROWSER binding, which
+  // standalone workerd does not have, so `metadata.screenshot` is never set and this placeholder is
+  // the only thing anyone will ever see here.
+  //
+  // So show something true instead. The initials come from the blueprint's own title and the
+  // gradient from its id, which makes each card distinguishable using data that actually exists,
+  // and claims nothing about content that was never captured.
+  // The *last* word, not the first letters of each. Measured against the titles this deployment
+  // actually ships: first-letters gives "Workspace Slides" and "Workspace Sheets" both "WS", because
+  // a shared leading word is the common case here. The trailing word is the distinguishing one.
+  const words = (title ?? '').split(/\s+/).filter(Boolean)
+  const last = words[words.length - 1] ?? ''
+  const initials = last.slice(0, 2).replace(/^./, c => c.toUpperCase())
+
   return (
     <div className="relative aspect-[16/9] overflow-hidden bg-kumo-base">
-      <div className={`absolute inset-0 bg-gradient-to-br ${getGradient(id)} opacity-[0.08]`} />
-      <div className="absolute -left-10 top-6 h-28 w-28 rounded-full bg-kumo-brand/10 blur-3xl" />
-      <div className="absolute -right-12 bottom-0 h-32 w-32 rounded-full bg-kumo-fill/30 blur-3xl" />
-      <svg
-        viewBox="0 0 640 360"
-        aria-hidden="true"
-        className="absolute inset-0 h-full w-full"
-      >
-        <rect x="52" y="54" width="536" height="252" rx="18" className="fill-kumo-base stroke-kumo-line" />
-        <rect x="84" y="86" width="132" height="12" rx="6" className="fill-kumo-line" opacity="0.8" />
-        <rect x="84" y="116" width="312" height="10" rx="5" className="fill-kumo-line" opacity="0.45" />
-        <rect x="84" y="142" width="472" height="1" className="fill-kumo-line" />
-        {[0, 1, 2, 3, 4].map(row => (
-          <g key={row} opacity={1 - row * 0.11}>
-            <rect x="84" y={166 + row * 28} width="64" height="7" rx="3.5" className="fill-kumo-line" />
-            <rect x="196" y={166 + row * 28} width="108" height="7" rx="3.5" className="fill-kumo-line" />
-            <rect x="360" y={166 + row * 28} width="76" height="7" rx="3.5" className="fill-kumo-line" />
-            <rect x="486" y={166 + row * 28} width="52" height="7" rx="3.5" className="fill-kumo-line" />
-          </g>
-        ))}
-      </svg>
-      <div className="absolute left-4 top-4 grid h-8 w-8 place-items-center rounded-xl bg-kumo-base/80 text-kumo-brand shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-kumo-line">
-        <Hexagon size={14} weight="bold" />
+      <div className={`absolute inset-0 bg-gradient-to-br ${getGradient(id)} opacity-25`} />
+      <div className="absolute inset-0 grid place-items-center">
+        {initials ? (
+          <span
+            aria-hidden="true"
+            className="text-[44px] leading-none font-semibold tracking-[-1px] text-kumo-default/25 select-none"
+          >
+            {initials}
+          </span>
+        ) : (
+          <Hexagon size={40} weight="bold" className="text-kumo-default/20" />
+        )}
       </div>
     </div>
   )
