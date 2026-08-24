@@ -280,6 +280,23 @@ count hours earlier, which is the failure this predicts. Bound a range by marker
 file (`awk '/^## Heading/,/^---$/'`) rather than by line numbers you guessed, and state which paths
 you searched when you report a negative.
 
+**A post-deploy grep must match the built form, not the source form.** Verifying `alpha.11` on the
+live edge, a check for `oklch(0.44 0.075 152)` returned 0 and read as a shipped-fix failure. The
+bundler had rewritten it to `oklch(44% .075 152)` — percentage lightness, leading zeros stripped —
+so the source string cannot appear in any build. Worse, the pre-deploy baseline had shown that row
+*failing* against the old release and that was read as proof it discriminates: it failed there for
+the same reason, so it was a check that could never pass, wearing the costume of one that could.
+The repair is to assert the minified spelling and re-baseline *that* against the previous build
+(absent from `alpha.10`, which carried `#2d6a4f`; present in `alpha.11`). Note which strings survive
+minification unchanged — identifiers, class names, prose in template literals — and which do not:
+numeric CSS values, colors and units are all rewritten.
+
+**Autofocus defeats a before/after comparison.** The same deploy's browser check reported the new
+composer focus ring "does not change on focus", while the computed value it printed *contained the
+ring*. The composer autofocuses on load, so "before" already had it and there was nothing to
+compare. Blur first, then focus, then blur again: `no ring → RING → no ring` is the shape that
+discriminates. A before/after is only evidence when you have established what "before" actually is.
+
 Both of the last two were then **explained away rather than investigated** — "CI was quick", "the
 two you are counting are on another branch". Plausible, unfalsified, and about discrepancies that
 did not exist. When a count disagrees with someone else's, re-derive it with a bounded command
