@@ -80,6 +80,38 @@ Ease out; no bounce, no elastic. Do not animate layout properties. Existing tran
 These are recorded as *defects* rather than preferences because two of the three are measurable
 against a standard, and the third is an internal contradiction in the file.
 
+## Where the brand tokens live (all of them)
+
+**Four places, not one.** Each package that builds its own bundle ships its own copy, and a change
+to one does not reach the others:
+
+| file | surface |
+|---|---|
+| `packages/workshop-frontend/src/styles.css` | the Workshop itself |
+| `packages/gatekeeper-context/app/styles.css` | Context Library management UI |
+| `packages/gatekeeper-scheduler/app/styles.css` | Scheduled Tasks UI |
+| `packages/mcp-shared/src/html.ts` | MCP OAuth consent pages (`--brand`, `--contrast`) |
+
+The last one matters beyond looks: `--contrast` is the primary button background on a consent
+screen, so an inherited Cloudflare orange there misrepresents who is asking for access.
+
+Before claiming a color is gone, run
+`grep -rl "color-kumo-brand" packages --include='*.css' --include='*.ts' | grep -v dist`. A sweep of
+the first file alone reported the migration complete while three surfaces were still fully orange.
+
+## Blueprint previews never resolve on this fork
+
+`blueprintScreenshotUrl()` returns `undefined` unless `metadata.screenshot` is set, and that is only
+set when a screenshot was captured — which needs the `BROWSER` binding. Standalone `workerd` has no
+Browser Rendering, so **no FieldOS deployment will ever have blueprint screenshots.** The placeholder
+is not a transient state; it is the permanent one.
+
+That rules out anything skeleton-shaped. A mock document that never resolves reads as perpetual
+loading, and drawing fake content makes unrelated blueprints look identical. The placeholder shows
+initials derived from the blueprint's own title over its id-derived gradient: real data, distinct per
+card, claiming nothing that was not captured. Use the **trailing** word — first-letters collides on
+the shipped set (`Workspace Slides` / `Workspace Sheets` both give `WS`).
+
 ## How the contrast numbers here were derived
 
 Stated so they can be re-derived rather than trusted. A ratio without its inputs is the same defect
