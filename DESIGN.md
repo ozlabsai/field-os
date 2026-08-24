@@ -112,6 +112,24 @@ initials derived from the blueprint's own title over its id-derived gradient: re
 card, claiming nothing that was not captured. Use the **trailing** word — first-letters collides on
 the shipped set (`Workspace Slides` / `Workspace Sheets` both give `WS`).
 
+## Blueprint gradients
+
+Eight hues fanned around the brand green (`BlueprintCard.tsx`), each a single hue at two lightnesses
+so a pair reads as one colour rather than a badge. None sits in the orange band.
+
+Two rules the previous set broke, both worth keeping:
+
+- **Decoration must not borrow meaning.** The old palette was literally Slack purple, Jira blue,
+  Discord, Google and GitHub — the same hexes `ConnectionLogos.tsx` uses to identify those real
+  services — so an unrelated blueprint was decorated to look like a Slack integration.
+- **The hash must use the whole id.** Ids here are namespaced, so `id.charCodeAt(0)` collides by
+  construction: every `format.*` blueprint drew the same gradient. And because
+  `gradients.length` is a power of two, a bare `*31` polynomial is not enough either — `31 ≡ 7
+  (mod 8)` leaves almost no entropy in the low bits, so the hash needs a xor-shift finalizer.
+
+This matters more here than it would elsewhere: preview placeholders are permanent on this fork, so
+the gradient is the only per-blueprint mark those cards will ever carry.
+
 ## How the contrast numbers here were derived
 
 Stated so they can be re-derived rather than trusted. A ratio without its inputs is the same defect
